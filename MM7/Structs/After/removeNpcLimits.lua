@@ -13,19 +13,65 @@ end
 -- minCols is minimum cell count - if less, function stops reading file and returns current count
 -- if row has at least needCol cols, current count is updated to its index, otherwise nothing is done
 
-local newNpcDataAddress
 do
-	local npcLimitRefs = { -- [offset from start] = {addresses...}
-		[0] = {0x416AE6, 0x416B3F}
+	--[[
+		local arrs = {"NPCDataTxt", "NPC", "NPCProfTxt", "NPCProfNames", "NPCTopic", "NPCText", "NPCNews", "NPCGroup", "NPCGreet", "StreetNPC"}
+		local out = {}
+		for k, name in pairs(arrs) do
+			local s = Game[name]
+			local low, high, size, itemSize = s["?ptr"], s["?ptr"] + s.Limit * s.ItemSize, s.Size, s.ItemSize
+			table.insert(out, {name = name, low = low, high = high, size = size, itemSize = itemSize})
+			print(string.format("%s: low = 0x%X, high = 0x%X, size = 0x%X, itemSize = 0x%X", name, low, high, size, itemSize))
+		end
+		table.sort(out, function(a, b) return a.low < b.low end)
+		for _, data in ipairs(out) do
+			print(string.format("%s: low = 0x%X, high = 0x%X, size = 0x%X, itemSize = 0x%X", data.name, data.low, data.high, data.size, data.itemSize))
+		end
+	]]
+	
+	-- npc tables data range: 0x724004 - 0x73C027
+	local npcLimitRefs = { -- [cmd offset] = {[offset from data start] = {addresses...}}
+		[2] = {
+			[0] = {0x416AE4, 0x416B3D, 0x420C18, 0x420C6F, 0x0042E25B, 0x0042E2D0, 0x0043067B, 0x004306F0},
+		},
+		--[0] = {0x416AE4, 0x416B3F}
 	}
-	local gameNpcRefs = {0x416AF0}
+	local gameNpcRefs = {
+		[1] = {
+			[0] = {0x416AEF, 0x00420C20},
+		},
+		[2] = {
+			[-0x98] = {0x420C90},
+			[8] = {0x004326A8},
+		},
+		[3] = {
+			[0] = {0042E269},
+		},
+		[4] = {
+			[0] = {0x00430687},
+		},
+	}
 	local npcProfRefs = {
-		[-4] = {0x416B8F}
+		[3] = {
+			[0] = {0x420CA8},
+			[-4] = {0x416B8C},
+			[-12] = {0x737AB7},
+		},
+	}
+	local npcGroupRefs = {
+		[4] = {
+			[0] = {0x4224F5},
+		},
+	}
+	local npcNewsRefs = {
+		[3] = {
+			[0] = {0x422509},
+		},
 	}
 	autohook(0x476CD5, function(d)
 		-- just loaded npcdata.txt, eax = data pointer, esi = space for processed data
 		local count = DataTables.ComputeRowCountInPChar(d.eax, 16, 16)
-		newNpcDataAddress = mem.StaticAlloc(1024 * 1024) -- megabyte
+		local newNpcDataAddress = mem.StaticAlloc(count * Game.NPCDataTxt["?size"])
 		d.esi = newNpcDataAddress
 		-- 0x73C028 - text data ptrs, in order: npcdata, npc names, npcprof, npcnews, npctopic, npctext, (empty), npcgreeting, npcgroup
 	end)
