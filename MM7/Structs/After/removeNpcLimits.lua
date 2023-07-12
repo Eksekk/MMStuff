@@ -45,13 +45,14 @@ do
 	-- npc tables data range: 0x724004 - 0x73C027
 	local npcLimitRefs = { -- [cmd offset] = {[offset from data start] = {addresses...}}
 		[2] = {
-			[0] = {0x416AE4, 0x416B3D, 0x420C18, 0x420C6F, 0x0042E25B, 0x0042E2D0, 0x0043067B, 0x004306F0},
+			[0] = {0x416AE4, 0x416B3D, 0x420C18, 0x420C6F, 0x0042E25B, 0x0042E2D0, 0x0043067B, 0x004306F0, 0x00445AC4, 0x00445B1F, 0x00445C06, 0x00445C67, 0x00445CFE, 0x00445D53, 0x00446132},
 		},
 		--[0] = {0x416AE4, 0x416B3F}
 	}
 	local gameNpcRefs = {
 		[1] = {
-			[0] = {0x416AEF, 0x00420C20},
+			[-0x98] = {0x00445B41, 0x00445C9D},
+			[0] = {0x416AEF, 0x00420C20, 0x00445A69, 0x00445AD5, 0x00445BA2, 0x00445C15, 0x00445D0E},
 		},
 		[2] = {
 			[-0x98] = {0x420C90},
@@ -66,9 +67,13 @@ do
 	}
 	local npcProfRefs = {
 		[3] = {
-			[0] = {0x420CA8},
-			[-4] = {0x416B8C},
 			[-12] = {0x737AB7},
+			[-4] = {0x416B8C},
+			[0] = {0x420CA8},
+			[4] = {0x00445523},
+			[8] = {0x44536B},
+			[12] = {0x00445545, 0x004455AD},
+			[16] = {0x0044551A, 0x004455A4},
 		},
 	}
 	local npcGroupRefs = {
@@ -80,6 +85,11 @@ do
 		[3] = {
 			[0] = {0x422509},
 		},
+	}
+	local streetNpcRefs = {
+		[1] = {
+			[0] = {0x00445A84, 0x00445BA2}
+		}
 	}
 	autohook(0x476CD5, function(d)
 		-- just loaded npcdata.txt, eax = data pointer, esi = space for processed data
