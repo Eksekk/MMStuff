@@ -43,79 +43,39 @@ do
 	]]
 	
 	-- npc tables data range: 0x724004 - 0x73C027
-	local npcLimitRefs = { -- [cmd offset] = {[offset from data start] = {addresses...}}
-		[2] = {
-			[0] = {0x416AE4, 0x416B3D, 0x420C18, 0x420C6F, 0x0042E25B, 0x0042E2D0, 0x0043067B, 0x004306F0, 0x00445AC4, 0x00445B1F, 0x00445C06, 0x00445C67, 0x00445CFE, 0x00445D53, 0x00446132, 0x00446187, 0x0044A597, 0x0044A5E3, 0x0044BF0E, 0x0044BF2E},
-		},
-		--[0] = {0x416AE4, 0x416B3F}
+	local npcLimitRefs = { -- [cmd offset] = {addresses...}
+		[2] = {0x416AE4, 0x416B3D, 0x420C18, 0x420C6F, 0x0042E25B, 0x0042E2D0, 0x0043067B, 0x004306F0, 0x00445AC4, 0x00445B1F, 0x00445C06, 0x00445C67, 0x00445CFE, 0x00445D53, 0x00446132, 0x00446187, 0x0044A597, 0x0044A5E3, 0x0044BF0E, 0x0044BF2E},
 	}
 	local gameNpcRefs = {
-		[1] = {
-			[-0x98] = {0x00445B41, 0x00445C9D},
-			[0] = {0x416AEF, 0x00420C20, 0x00445A69, 0x00445AD5, 0x00445BA2, 0x00445C15, 0x00445D0E, 0x0044A5A0, 0x0045F1C3, 0x0045F91E},
-			[8] = {0x0044BF16},
-			[0x54] = {0x0044613D}
-		},
-		[2] = {
-			[-0x98] = {0x420C90},
-			[0] = {0x00446DC1},
-			[8] = {0x004326A8, 0x00446D68, 0x0044A2E1, 0x0044AD77, 0x0044B73C, 0x0044BFA8},
-			[0x14] = {0x0044713B},
-			[0x1C] = {0x00446D6F}
-		},
-		[3] = {
-			[0] = {0042E269},
-		},
-		[4] = {
-			[0] = {0x00430687},
-		},
+		[1] = {0x00445B41, 0x00445C9D, 0x416AEF, 0x00420C20, 0x00445A69, 0x00445AD5, 0x00445BA2, 0x00445C15, 0x00445D0E, 0x0044A5A0, 0x0045F1C3, 0x0045F91E, 0x0044BF16, 0x0044613D},
+		[2] = {0x420C90, 0x00446DC1, 0x004326A8, 0x00446D68, 0x0044A2E1, 0x0044AD77, 0x0044B73C, 0x0044BFA8, 0x0044713B, 0x00446D6F},
+		[3] = {0042E269},
+		[4] = {0x00430687},
 	}
 	local npcDataRefs = {
-		[1] = {
-			[0x4C] = {0x0045F1D0},
-		},
+		[1] = {0x0045F1D0},
 	}
 	local npcProfRefs = {
-		[3] = {
-			[-12] = {0x737AB7},
-			[-4] = {0x416B8C},
-			[0] = {0x420CA8},
-			[4] = {0x00445523},
-			[8] = {0x44536B},
-			[12] = {0x00445545, 0x004455AD},
-			[16] = {0x0044551A, 0x004455A4},
-		},
+		[3] = {0x737AB7, 0x416B8C, 0x420CA8, 0x00445523, 0x44536B, 0x00445545, 0x004455AD, 0x0044551A, 0x004455A4},
 	}
 	local npcGroupRefs = {
-		[1] = {
-			[0] = {0x0045F229, 0x0045F98A},
-		},
-		[4] = {
-			[0] = {0x4224F5, 0x00446FD1},
-		},
+		[1] = {0x0045F229, 0x0045F98A},
+		[4] = {0x4224F5, 0x00446FD1},
 	}
 	local npcNewsRefs = {
-		[3] = {
-			[0] = {0x422509},
-		},
+		[3] = {0x422509},
 	}
 	local streetNpcRefs = {
-		[1] = {
-			[0] = {0x00445A84, 0x00445BA2}
-		}
+		[1] = {0x00445A84, 0x00445BA2},
 	}
 	local streetNpcSizeRefs = {
-		[1] = {
-			[0] = {0x0046139E,},
-		},
-		[2] = {
-			[0] = {0x0046117C,},
-		},
+		[1] = {0x0046139E,},
+		[2] = {0x0046117C,},
 	}
 	autohook(0x476CD5, function(d)
 		-- just loaded npcdata.txt, eax = data pointer, esi = space for processed data
 		local count = DataTables.ComputeRowCountInPChar(d.eax, 16, 16)
-		local newNpcDataAddress = mem.StaticAlloc(count * Game.NPCDataTxt["?size"])
+		local newNpcDataAddress = mem.StaticAlloc(count * Game.NPCDataTxt.ItemSize)
 		d.esi = newNpcDataAddress
 		-- 0x73C028 - text data ptrs, in order: npcdata, npc names, npcprof, npcnews, npctopic, npctext, (empty), npcgreeting, npcgroup
 	end)
