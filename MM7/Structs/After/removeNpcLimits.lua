@@ -15,18 +15,31 @@ end
 
 do
 	--[[
+		local format = string.format
 		local arrs = {"NPCDataTxt", "NPC", "NPCProfTxt", "NPCProfNames", "NPCTopic", "NPCText", "NPCNews", "NPCGroup", "NPCGreet", "StreetNPC"}
 		local out = {}
 		for k, name in pairs(arrs) do
 			local s = Game[name]
 			local low, high, size, itemSize = s["?ptr"], s["?ptr"] + s.Limit * s.ItemSize, s.Size, s.ItemSize
 			table.insert(out, {name = name, low = low, high = high, size = size, itemSize = itemSize})
-			print(string.format("%s: low = 0x%X, high = 0x%X, size = 0x%X, itemSize = 0x%X", name, low, high, size, itemSize))
 		end
 		table.sort(out, function(a, b) return a.low < b.low end)
 		for _, data in ipairs(out) do
-			print(string.format("%s: low = 0x%X, high = 0x%X, size = 0x%X, itemSize = 0x%X", data.name, data.low, data.high, data.size, data.itemSize))
+			print(format("%-15s %-17s %-17s %-17s itemSize = 0x%X", data.name .. ":", format("low = 0x%X", data.low), format("high = 0x%X", data.high), format("size = 0x%X", data.size), data.itemSize))
 		end
+	]]
+
+	--[[
+		NPCTopic:       low = 0x7214E8    high = 0x722D90   size = 0x18A8     itemSize = 0x8
+		NPCText:        low = 0x7214EC    high = 0x722D94   size = 0x18A8     itemSize = 0x8
+		NPCDataTxt:     low = 0x724050    high = 0x72D50C   size = 0x94BC     itemSize = 0x4C
+		NPC:            low = 0x72D50C    high = 0x7369C8   size = 0x94BC     itemSize = 0x4C
+		NPCProfTxt:     low = 0x737AA8    high = 0x737F44   size = 0x49C      itemSize = 0x14
+		StreetNPC:      low = 0x737F44    high = 0x739CF4   size = 0x0        itemSize = 0x4C
+		NPCNews:        low = 0x739CF4    high = 0x739DC0   size = 0xCC       itemSize = 0x4
+		NPCGreet:       low = 0x73B8D4    high = 0x73BF44   size = 0x670      itemSize = 0x8
+		NPCGroup:       low = 0x73BFAA    high = 0x73C010   size = 0x66       itemSize = 0x2
+		NPCProfNames:   low = 0x73C110    high = 0x73C1FC   size = 0xEC       itemSize = 0x4
 	]]
 	
 	-- npc tables data range: 0x724004 - 0x73C027
