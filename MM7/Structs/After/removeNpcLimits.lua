@@ -3,9 +3,9 @@ local hook, autohook, autohook2, asmpatch = mem.hook, mem.autohook, mem.autohook
 local max, min, floor, ceil, round, random = math.max, math.min, math.floor, math.ceil, math.round, math.random
 local format = string.format
 
-function replacePtrs(addr, offset)
-	for i, v in ipairs(addr) do
-		i4[v] = i4[addr] + offset
+function replacePtrs(addrTable, newAddr, origin, cmdSize)
+	for i, oldAddr in ipairs(addrTable) do
+		i4[oldAddr + cmdSize] = newAddr - (origin - i4[oldAddr + cmdSize])
 	end
 end
 
@@ -45,24 +45,34 @@ do
 	-- npc tables data range: 0x724004 - 0x73C027
 	local npcLimitRefs = { -- [cmd offset] = {[offset from data start] = {addresses...}}
 		[2] = {
-			[0] = {0x416AE4, 0x416B3D, 0x420C18, 0x420C6F, 0x0042E25B, 0x0042E2D0, 0x0043067B, 0x004306F0, 0x00445AC4, 0x00445B1F, 0x00445C06, 0x00445C67, 0x00445CFE, 0x00445D53, 0x00446132},
+			[0] = {0x416AE4, 0x416B3D, 0x420C18, 0x420C6F, 0x0042E25B, 0x0042E2D0, 0x0043067B, 0x004306F0, 0x00445AC4, 0x00445B1F, 0x00445C06, 0x00445C67, 0x00445CFE, 0x00445D53, 0x00446132, 0x00446187, 0x0044A597, 0x0044A5E3, 0x0044BF0E, 0x0044BF2E},
 		},
 		--[0] = {0x416AE4, 0x416B3F}
 	}
 	local gameNpcRefs = {
 		[1] = {
 			[-0x98] = {0x00445B41, 0x00445C9D},
-			[0] = {0x416AEF, 0x00420C20, 0x00445A69, 0x00445AD5, 0x00445BA2, 0x00445C15, 0x00445D0E},
+			[0] = {0x416AEF, 0x00420C20, 0x00445A69, 0x00445AD5, 0x00445BA2, 0x00445C15, 0x00445D0E, 0x0044A5A0, 0x0045F1C3, 0x0045F91E},
+			[8] = {0x0044BF16},
+			[0x54] = {0x0044613D}
 		},
 		[2] = {
 			[-0x98] = {0x420C90},
-			[8] = {0x004326A8},
+			[0] = {0x00446DC1},
+			[8] = {0x004326A8, 0x00446D68, 0x0044A2E1, 0x0044AD77, 0x0044B73C, 0x0044BFA8},
+			[0x14] = {0x0044713B},
+			[0x1C] = {0x00446D6F}
 		},
 		[3] = {
 			[0] = {0042E269},
 		},
 		[4] = {
 			[0] = {0x00430687},
+		},
+	}
+	local npcDataRefs = {
+		[1] = {
+			[0x4C] = {0x0045F1D0},
 		},
 	}
 	local npcProfRefs = {
@@ -77,8 +87,11 @@ do
 		},
 	}
 	local npcGroupRefs = {
+		[1] = {
+			[0] = {0x0045F229, 0x0045F98A},
+		},
 		[4] = {
-			[0] = {0x4224F5},
+			[0] = {0x4224F5, 0x00446FD1},
 		},
 	}
 	local npcNewsRefs = {
@@ -90,6 +103,14 @@ do
 		[1] = {
 			[0] = {0x00445A84, 0x00445BA2}
 		}
+	}
+	local streetNpcSizeRefs = {
+		[1] = {
+			[0] = {0x0046139E,},
+		},
+		[2] = {
+			[0] = {0x0046117C,},
+		},
 	}
 	autohook(0x476CD5, function(d)
 		-- just loaded npcdata.txt, eax = data pointer, esi = space for processed data
