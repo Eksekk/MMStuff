@@ -112,12 +112,19 @@ do
 
 	-- NPC TOPIC ref ends with 8 or 0, NPC TEXT with 4 or C
 
+	-- command sizes below 3 seem to use hardcoded values, 3 and above uses variable topic/text index
 	local npcTopicRefs = {
-
+		[1] = {0x00445362, },
+		[2] = {},
+		[3] = {0x004212F7, 0x004457B9, 0x0046ABDE, 0x004B2CFF, 0x004B2D80},
+		[4] = {0x00476A8F0, 0x00476B13},
 	}
 
 	local npcTextRefs = {
-
+		[1] = {0x00416B7F, 0x00446EFA, 0x004B1E37, 0x004B24DC, 0x004B262D, 0x004B263B, 0x004B26E9, 0x004B298B, 0x004B29A8, 0x004B29BC, 0x004BBC20, 0x004BBC2A, 0x004BBC31, 0x004BD241, 0x004BD2C9, 0x004BD2D0},
+		[2] = {0x00431DF1, 0x004956B6, 0x004B1EB0, 0x004B4A56, 0x004B638E, 0x004B6800, 0x004B8CA8},
+		[3] = {0x00447BEE, 0x00447C0D, 0x00447C65, 0x004B2654, 0x004B29C3, 0x004B3E61, 0x004B3F57, 0x004B6800, 0x004B8BF5},
+		[4] = {0x004769C4},
 	}
 
 	autohook(0x476CD5, function(d)
