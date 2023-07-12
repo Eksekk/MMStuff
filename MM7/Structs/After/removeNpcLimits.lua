@@ -13,12 +13,26 @@ end
 -- minCols is minimum cell count - if less, function stops reading file and returns current count
 -- if row has at least needCol cols, current count is updated to its index, otherwise nothing is done
 
-autohook(0x476CD5, function(d)
-	-- just loaded npcdata.txt, eax = data pointer, esi/edi = space for processed data
-
-	-- 0x73C028 - text data ptrs, in order: npcdata, npc names, npcprof, npcnews, npctopic, npctext, (empty), npcgreeting, npcgroup
-end)
+local newNpcDataAddress
+do
+	local npcLimitRefs = { -- [offset from start] = {addresses...}
+		[0] = {0x416AE6, 0x416B3F}
+	}
+	local gameNpcRefs = {0x416AF0}
+	local npcProfRefs = {
+		[-4] = {0x416B8F}
+	}
+	autohook(0x476CD5, function(d)
+		-- just loaded npcdata.txt, eax = data pointer, esi = space for processed data
+		local count = DataTables.ComputeRowCountInPChar(d.eax, 16, 16)
+		newNpcDataAddress = mem.StaticAlloc(1024 * 1024) -- megabyte
+		d.esi = newNpcDataAddress
+		-- 0x73C028 - text data ptrs, in order: npcdata, npc names, npcprof, npcnews, npctopic, npctext, (empty), npcgreeting, npcgroup
+	end)
+end
 
 mem.autohook(0x476A81, function(d) -- load npctopic
 	
 end)
+
+--print((Game.NPCDataTxt.?ptr - Game.NPCDataTxt[0].?size):tohex(), Game.Npc
