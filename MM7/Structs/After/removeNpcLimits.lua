@@ -3,15 +3,18 @@ local hook, autohook, autohook2, asmpatch = mem.hook, mem.autohook, mem.autohook
 local max, min, floor, ceil, round, random = math.max, math.min, math.floor, math.ceil, math.round, math.random
 local format = string.format
 
-function replacePtrs(addrTable, newAddr, origin, cmdSize)
+function replacePtrs(addrTable, newAddr, origin, cmdSize, check)
 	for i, oldAddr in ipairs(addrTable) do
-		i4[oldAddr + cmdSize] = newAddr - (origin - i4[oldAddr + cmdSize])
+		local old = u4[oldAddr + cmdSize]
+		local new = newAddr - (origin - old)
+		check(old, new)
+		u4[oldAddr + cmdSize] = new
 	end
 end
 
 -- DataTables.ComputeRowCountInPChar(p, minCols, needCol)
 -- minCols is minimum cell count - if less, function stops reading file and returns current count
--- if row has at least needCol cols, current count is updated to its index, otherwise nothing is done
+-- if col #needCol is not empty, current count is updated to its index, otherwise nothing is done
 
 do
 	--[[
@@ -42,8 +45,6 @@ do
 	]]
 
 	-- maybe unrelated addresses: 0x4764B4, 0x4BC81E, 0x4BC82C - reference 0x724048
-
-	-- FIXME: NPCProfNames wasn't included in initial search!
 	
 	-- npc tables data range: 0x724004 - 0x73C027
 	
@@ -63,7 +64,14 @@ do
 			[1] = {0x491B19}
 		},
 		limit = { -- same as above
-			[2] = {0x416AE4, 0x416B3D, 0x420C18, 0x420C6F, 0x42E25B, 0x42E2D0, 0x43067B, 0x4306F0, 0x445AC4, 0x445B1F, 0x445C06, 0x445C67, 0x445CFE, 0x445D53, 0x446132, 0x446187, 0x44A597, 0x44A5E3, 0x44BF0E, 0x44BF2E, 0x463520, 0x463539, 0x4763A7, 0x491FC2, 0x492017, 0x494142, 0x494161, 0x4BC478, 0x4BC4A7, 0x4BC581, 0x4BC5A8},
+			-- this is where variable holding amount is accessed
+			-- [2] = {0x416AE4, 0x416B3D, 0x420C18, 0x420C6F, 0x42E25B, 0x42E2D0, 0x43067B, 0x4306F0, 0x445AC4, 0x445B1F, 0x445C06, 0x445C67, 0x445CFE, 0x445D53, 0x446132, 0x446187, 0x44A597, 0x44A5E3, 0x44BF0E, 0x44BF2E, 0x463520, 0x463539, 0x4763A7, 0x491FC2, 0x492017, 0x494142, 0x494161, 0x4BC478, 0x4BC4A7, 0x4BC581, 0x4BC5A8, 0x445A34},
+
+			-- those are hardcoded values
+			[0] = {0x73C014},
+			[2] = {0x445A34, 0x445B6B},
+			[3] = {0x476CFE},
+			--[6] = {0x476E1B},
 		}
 	}
 
@@ -78,6 +86,7 @@ do
 		[1] = {0x45F229, 0x45F98A, 0x491B34},
 		[4] = {0x4224F5, 0x446FD1, 0x46A572},
 		size = {
+			arr = u1,
 			[1] = {0x491B2D,},
 		}
 	}
@@ -95,6 +104,7 @@ do
 		},
 	}
 
+	-- these really are random npc names, not those that npcs in npcdata.txt use
 	local npcNamesRefs = {
 		[2] = {0x4953BD},
 		[3] = {0x49543D, 0x48E9DA},
@@ -126,13 +136,88 @@ do
 		[4] = {0x4769C4},
 	}
 
+	local function processAddressTable(arrName, newAddress, newCount, addressTable)
+		local arr = Game[arrName]
+		local origin = arr["?ptr"]
+		local oldMin, oldMax, newMin, newMax = origin - arr.ItemSize, origin + arr.Size + arr.ItemSize, newAddress - arr.ItemSize, newAddress + arr.ItemSize * (newCount + 1)
+		local function check(old, new)
+			assert(old >= oldMin and old <= oldMax, format("[%s] old address 0x%X is outside array bounds [0x%X, 0x%X] (new entry count: %d)", arrName, old, oldMin, oldMax, newCount))
+			assert(new >= newMin and new <= newMax, format("[%s] new address 0x%X is outside array bounds [0x%X, 0x%X] (new entry count: %d)", arrName, new, newMin, newMax, newCount))
+		end
+		mem.prot(true)
+		for cmdSize, addresses in pairs(addressTable) do
+			if type(cmdSize) == "number" then
+				replacePtrs(addresses, newAddress, origin, cmdSize, check)
+			else
+				local what = cmdSize
+				local memArr = addresses.arr or i4
+				for cmdSize, addresses in pairs(addresses) do
+					for i, addr in ipairs(addresses) do
+
+						if what == "limit" then
+							memArr[addr + cmdSize] = memArr[addr + cmdSize] - arr.Limit + newCount
+						elseif what == "count" then
+							-- skip
+						elseif what == "size" then
+							memArr[addr + cmdSize] = arr.ItemSize * newCount
+						end
+					end
+				end
+			end
+		end
+		mem.ChangeGameArray(arrName, newAddress, newCount)
+		mem.prot()
+	end
+
+	local function replaceTableDataPtr(addr, cmdSize, new)
+		mem.prot(true)
+		u4[addr + cmdSize] = new
+		mem.prot()
+	end
+
 	autohook(0x476CD5, function(d)
 		-- just loaded npcdata.txt, eax = data pointer, esi = space for processed data
-		local count = DataTables.ComputeRowCountInPChar(d.eax, 16, 16)
+		local count = DataTables.ComputeRowCountInPChar(d.eax, 16, 16) - 2 -- todo: fix arguments
 		local newNpcDataAddress = mem.StaticAlloc(count * Game.NPCDataTxt.ItemSize)
 		d.esi = newNpcDataAddress
+		processAddressTable("NPCDataTxt", newNpcDataAddress, count, npcDataRefs)
 		-- 0x73C028 - text data ptrs, in order: npcdata, npc names, npcprof, npcnews, npctopic, npctext, (empty), npcgreeting, npcgroup
+		asmpatch(0x476CDA, "mov [0x73C028], eax")
+		-- 0x739DC4 contains pointers to npcdata.txt npc names (Game.NPCNames is for random names)
+		asmpatch(0x476CEF, "mov eax, 0x739DC4")
+		asmpatch(0x476E1B, "mov dword ptr [0x73C014]," .. (count + 1))
 	end)
+
+	autohook2(0x476E25, function(d)
+		-- just loaded npcgreet.txt
+		local count = DataTables.ComputeRowCountInPChar(d.eax, 3, 2) - 1
+		--d.esi = 0x724050
+		--processAddressTable("NPCGreet", newGreetingDataAddress, count, npc)
+		local newGreetingDataAddress = mem.StaticAlloc(count * Game.NPCGreet.ItemSize)
+		d.esi = newGreetingDataAddress
+		asmpatch(0x476E2C, "mov [0x73C044], eax")
+		asmpatch(0x476E38, "mov eax, esi")
+	end)
+
+	autohook2(0x476ECD, function(d)
+		local count = DataTables.ComputeRowCountInPChar(d.eax, 2, 2) - 1
+		local newNpcGroupAddress = mem.StaticAlloc(count * Game.NPCGroup.ItemSize)
+		d.esi = newNpcGroupAddress
+		processAddressTable("NPCGroup", newNpcGroupAddress, count, npcGroupRefs)
+		asmpatch(0x476ED4, "mov [0x73C048],eax")
+		asmpatch(0x476EE0, "mov eax, esi")
+	end)
+
+	autohook2(0x476F66, function(d)
+		local count = DataTables.ComputeRowCountInPChar(d.eax, 2, 2) - 1
+		local newNpcNewsAddress = mem.StaticAlloc(count * Game.NPCNews.ItemSize)
+		d.esi = newNpcNewsAddress
+		processAddressTable("NPCNews", newNpcNewsAddress, count, npcNewsRefs)
+		asmpatch(0x476F6D, "mov [0x73C034],eax")
+		mem.nop(0x476F79)
+	end)
+	
+	-- 0x47736D patch npcnames ptr
 end
 
 mem.autohook(0x476A81, function(d) -- load npctopic
