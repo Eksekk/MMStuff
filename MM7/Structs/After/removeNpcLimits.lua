@@ -169,11 +169,8 @@ do
 		mem.prot()
 	end
 
-	local function replaceTableDataPtr(addr, cmdSize, new)
-		mem.prot(true)
-		u4[addr + cmdSize] = new
-		mem.prot()
-	end
+	-- SEARCH FOR REFERENCES to offsets from esi when loading txt tables? (like "lea esi,dword ptr [edi+17FDC]")
+	-- USE FIND HELPER
 
 	autohook(0x476CD5, function(d)
 		-- just loaded npcdata.txt, eax = data pointer, esi = space for processed data
@@ -216,8 +213,34 @@ do
 		asmpatch(0x476F6D, "mov [0x73C034],eax")
 		mem.nop(0x476F79)
 	end)
-	
+
 	-- 0x47736D patch npcnames ptr
+	autohook(0x477088, function(d)
+		local count = DataTables.ComputeRowCountInPChar(d.eax, 2, 2) - 1
+		local newSize = count * Game.NPCNames.ItemSize
+		local newNpcNamesAddress = mem.StaticAlloc(newSize + 8) -- +8 for male/female count (u4)
+		mem.nop(0x47706A) -- don't calculate destination space before file has been loaded
+		mem.nop(0x477081) -- don't zero invalid field (because it's not calculated, see above)
+		asmpatch(0x47707B, "mov [0x73C010],ebx") -- zeroes Game.StreetNPC size
+
+		-- male/female name counts
+		local female, male = 0x73C020, 0x73C024
+		asmpatch(0x47710C, "mov eax, " .. male)
+		asmpatch(0x477158, format("mov [%d],eax", female))
+		asmpatch(0x47736D, format("idiv dword ptr [esi*4+%d]", female))
+		--asmpatch(0x48E9CA, "idiv dword ptr [esi*4+]")
+		asmpatch(0x4CA7B3, [[
+			; don't overwrite npc name count due to my script splitting npc tables space into multiple ones
+			push dword [0x73C020]
+			push dword [0x73C024]
+			rep movsd
+			pop ecx
+			mov [0x73C024], ecx
+			pop ecx
+			mov [0x73C020], ecx
+			jmp dword ptr [edx*4+0x4CA8C8]
+		]])
+	end)
 end
 
 mem.autohook(0x476A81, function(d) -- load npctopic
