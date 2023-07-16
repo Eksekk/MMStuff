@@ -97,6 +97,14 @@ do
 		NPCProfNames:   itemSize = 0x4    dataOffset = 0x180C0
 	]]
 
+	--[[
+		REMOVE LIMITS WORKFLOW:
+		1) generate above text to facilitate finding references
+		2) find all references which are findable by search
+		3) patch each place where files are loaded, allocating space for data, asmpatching some addresses to use new data, and replace all references with function call
+		4) test and fix all bugs you can find
+	]]
+
 	-- maybe unrelated addresses: 0x4764B4, 0x4BC81E, 0x4BC82C - reference 0x724048
 	
 	-- npc tables data range: 0x724004 - 0x73C027
@@ -143,12 +151,18 @@ do
 		size = {
 			arr = u1,
 			[1] = {0x491B2D,},
+		},
+		limit = {
+			[3] = {0x476EEA}
 		}
 	}
 	-- TODO: 0x491B2F has npc groups, which are copied into Game.NPCGroup (or vice versa) at 0x491B2D. Investigate this
 
 	local npcNewsRefs = {
 		[3] = {0x422509, 0x46A586},
+		limit = {
+			[3] = {0x476F83}
+		}
 	}
 
 	local streetNpcRefs = {
@@ -170,6 +184,13 @@ do
 		limit = {
 			[3] = {0x477133}
 		}
+	}
+
+	local npcGreetRefs = {
+		limit = {
+			[3] = {0x476E42}
+		}
+		-- yes, only limit, because apparently mmextension patches the places where data is referenced
 	}
 
 	--[[
@@ -204,7 +225,7 @@ do
 		local arr = Game[arrName]
 		local origin = arr["?ptr"]
 		local lowerBoundIncrease = (addressTable.lowerBoundIncrease or 0) * arr.ItemSize
-		addressTable.lowerBoundIncrease = nil
+		addressTable.lowerBoundIncrease = nil -- eliminate special case in below loop
 		local oldMin, oldMax = origin - arr.ItemSize - lowerBoundIncrease, origin + arr.Size + arr.ItemSize
 		local newMin, newMax = newAddress - arr.ItemSize - lowerBoundIncrease, newAddress + arr.ItemSize * (newCount + 1)
 		local function check(old, new, cmdSize, i)
@@ -239,13 +260,17 @@ do
 		mem.prot()
 	end
 
-	-- SEARCH FOR REFERENCES to offsets from esi when loading txt tables? (like "lea esi,dword ptr [edi+17FDC]")
-	-- USE FIND HELPER
+	-- HAVE TO ALLOCATE TABLES with allocMM, because game tries to free them at 0x47726A, causing crashes
+	-- FIXME: this function gets passed new npc data address instead of old, and tries to use offsets from it to get pointers to table contents
+	-- need to either call function with old npc data ptr or patch all offset usages to use absolute address instead
+	-- alternatively, maybe don't call this function for npc data?
+
+	-- also important to finish checking references in range 0x11000-0x20000
 
 	autohook(0x476CD5, function(d)
 		-- just loaded npcdata.txt, eax = data pointer, esi = space for processed data
 		local count = DataTables.ComputeRowCountInPChar(d.eax, 16, 16) - 2 -- todo: fix arguments
-		local newNpcDataAddress = mem.StaticAlloc(count * Game.NPCDataTxt.ItemSize)
+		local newNpcDataAddress = mem.allocMM(count * Game.NPCDataTxt.ItemSize)
 		d.esi = newNpcDataAddress
 		processReferencesTable("NPCDataTxt", newNpcDataAddress, count, npcDataRefs)
 		-- 0x73C028 - text data ptrs, in order: npcdata, npc names, npcprof, npcnews, npctopic, npctext, (empty), npcgreeting, npcgroup
@@ -260,24 +285,27 @@ do
 			lea esi, [eax + %origNpcdataPtr%]
 		]])
 
-		local newGameNpcAddress = mem.StaticAlloc(count * Game.NPC.ItemSize)
+		local newGameNpcAddress = mem.allocMM(count * Game.NPC.ItemSize)
 		processReferencesTable("NPC", newGameNpcAddress, count, gameNpcRefs)
 	end)
 
 	autohook2(0x476E25, function(d)
 		-- just loaded npcgreet.txt
+		--function findGreetIndexes(text) for k, v in Game.NPCGreet do for i, t in v do if t:match(text) then print(k, i); break end end end end
 		local count = DataTables.ComputeRowCountInPChar(d.eax, 3, 2) - 1
 		--d.esi = 0x724050
 		--processAddressTable("NPCGreet", newGreetingDataAddress, count, npc)
-		local newGreetingDataAddress = mem.StaticAlloc(count * Game.NPCGreet.ItemSize)
-		d.esi = newGreetingDataAddress
+		local newGreetingDataAddress = mem.allocMM((count + 1) * Game.NPCGreet.ItemSize) -- +1, because there is empty entry at the beginning
+		d.esi = newGreetingDataAddress + 8 -- size of two editpchars (game gets address of entry it should write to)
+		processReferencesTable("NPCGreet", newGreetingDataAddress, count, npcGreetRefs) -- but mmextension gets real address
+		--mem.ChangeGameArray("NPCGreet", newGreetingDataAddress, count)
 		asmpatch(0x476E2C, "mov [0x73C044], eax") -- correct data pointer
 		asmpatch(0x476E38, "mov eax, esi")
 	end)
 
 	autohook2(0x476ECD, function(d)
 		local count = DataTables.ComputeRowCountInPChar(d.eax, 2, 2) - 1
-		local newNpcGroupAddress = mem.StaticAlloc(count * Game.NPCGroup.ItemSize)
+		local newNpcGroupAddress = mem.allocMM(count * Game.NPCGroup.ItemSize)
 		d.esi = newNpcGroupAddress
 		processReferencesTable("NPCGroup", newNpcGroupAddress, count, npcGroupRefs)
 		asmpatch(0x476ED4, "mov [0x73C048],eax") -- correct data pointer
@@ -286,7 +314,7 @@ do
 
 	autohook2(0x476F66, function(d)
 		local count = DataTables.ComputeRowCountInPChar(d.eax, 2, 2) - 1
-		local newNpcNewsAddress = mem.StaticAlloc(count * Game.NPCNews.ItemSize)
+		local newNpcNewsAddress = mem.allocMM(count * Game.NPCNews.ItemSize)
 		d.esi = newNpcNewsAddress
 		processReferencesTable("NPCNews", newNpcNewsAddress, count, npcNewsRefs)
 		asmpatch(0x476F6D, "mov [0x73C034],eax") -- correct data pointer
@@ -361,7 +389,7 @@ do
 		local newTopicCount = DataTables.ComputeRowCountInPChar(u4[npcTopicPtr], 2, 2) - 1
 
 		local count = max(newTopicCount, newTextCount)
-		local newSpacePtr = mem.StaticAlloc(count * 8)
+		local newSpacePtr = mem.allocMM(count * 8)
 
 		-- NPC TEXT
 
