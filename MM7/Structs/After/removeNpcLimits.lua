@@ -3,6 +3,8 @@ local hook, autohook, autohook2, asmpatch = mem.hook, mem.autohook, mem.autohook
 local max, min, floor, ceil, round, random = math.max, math.min, math.floor, math.ceil, math.round, math.random
 local format = string.format
 
+if offsets.MMVersion ~= 7 then return end
+
 function arrayFieldOffsetName(arr, offset)
 	local i = offset:div(arr.ItemSize)
 	local off = offset % arr.ItemSize
@@ -42,6 +44,7 @@ function replacePtrs(addrTable, newAddr, origin, cmdSize, check)
 		u4[oldAddr + cmdSize] = new
 	end
 end
+
 -- DataTables.ComputeRowCountInPChar(p, minCols, needCol)
 -- minCols is minimum cell count - if less, function stops reading file and returns current count
 -- if col #needCol is not empty, current count is updated to its index, otherwise nothing is done - meant to exclude empty entries at the end of some files
@@ -84,20 +87,6 @@ do
 	]]
 
 	--[[
-		NPCTopic:       itemSize = 0x8    dataOffset = 0xFFFFFFFFFFFFD498
-		NPCText:        itemSize = 0x8    dataOffset = 0xFFFFFFFFFFFFD49C
-		NPCDataTxt:     itemSize = 0x4C   dataOffset = 0x0 
-		NPC:            itemSize = 0x4C   dataOffset = 0x94BC
-		NPCNames:       itemSize = 0x8    dataOffset = 0x12978
-		NPCProfTxt:     itemSize = 0x14   dataOffset = 0x13A58
-		StreetNPC:      itemSize = 0x4C   dataOffset = 0x13EF4
-		NPCNews:        itemSize = 0x4    dataOffset = 0x15CA4
-		NPCGreet:       itemSize = 0x8    dataOffset = 0x17884
-		NPCGroup:       itemSize = 0x2    dataOffset = 0x17F5A
-		NPCProfNames:   itemSize = 0x4    dataOffset = 0x180C0
-	]]
-
-	--[[
 		REMOVE LIMITS WORKFLOW:
 		1) generate above text to facilitate finding references
 		2) find all references which are findable by search
@@ -118,7 +107,11 @@ do
 			},
 		[3] = {0x42E269},
 		[4] = {0x430687},
-		lowerBoundIncrease = 1, -- minimum address will be increased by this * ItemSize
+		lowerBoundIncrease = 1, -- minimum address will be increased by this * ItemSize,
+		size = {
+			[1] = {0x45F1BE},
+			[3] = {0x45F916},
+		}
 	}
 
 	local npcDataRefs = {
@@ -138,8 +131,6 @@ do
 		}
 	}
 
-	-- REMEMBER TO make code copying new npcs from npcdata to savegame npcs if new added
-
 	-- TODO? Grayface removed npc prof limits? might be unnecessary
 	local npcProfRefs = {
 		[3] = {0x737AB7, 0x416B8C, 0x420CA8, 0x445523, 0x44536B, 0x445545, 0x4455AD, 0x44551A, 0x4455A4, 0x49597C, 0x4B1FE2, 0x4B228C, 0x4B2295, 0x4B22EA, 0x4B2364, 0x4B3DD9, 0x4B4101, 0x4BC67D},
@@ -151,6 +142,7 @@ do
 		size = {
 			arr = u1,
 			[1] = {0x491B2D,},
+			[3] = {{arr = u4, 0x45F982}}
 		},
 		limit = {
 			[3] = {0x476EEA}
@@ -193,14 +185,9 @@ do
 		-- yes, only limit, because apparently mmextension patches the places where data is referenced
 	}
 
-	--[[
-	NPCTopic:       low = 0x7214E8    high = 0x722D90   size = 0x18A8     itemSize = 0x8
-	NPCText:        low = 0x7214EC    high = 0x722D94   size = 0x18A8     itemSize = 0x8
-	]]
-
 	-- NPC TOPIC ref ends with 8 or 0, NPC TEXT with 4 or C
 
-	-- command sizes below 3 seem to use hardcoded values, 3 and above uses variable topic/text index
+	-- command sizes below 3 seem to use hardcoded values, 3 and above uses variable topic/text index - important for de-hardcoding npcs
 	local npcTopicRefs = {
 		[1] = {0x445362, },
 		[2] = {},
@@ -225,7 +212,7 @@ do
 		local arr = Game[arrName]
 		local origin = arr["?ptr"]
 		local lowerBoundIncrease = (addressTable.lowerBoundIncrease or 0) * arr.ItemSize
-		addressTable.lowerBoundIncrease = nil -- eliminate special case in below loop
+		addressTable.lowerBoundIncrease = nil -- eliminate special case in loop below
 		local oldMin, oldMax = origin - arr.ItemSize - lowerBoundIncrease, origin + arr.Size + arr.ItemSize
 		local newMin, newMax = newAddress - arr.ItemSize - lowerBoundIncrease, newAddress + arr.ItemSize * (newCount + 1)
 		local function check(old, new, cmdSize, i)
@@ -242,7 +229,15 @@ do
 				local what = cmdSize
 				local memArr = addresses.arr or i4
 				for cmdSize, addresses in pairs(addresses) do
-					for i, addr in ipairs(addresses) do
+					for i, data in ipairs(addresses) do
+						-- support per-address mem array types
+						local memArr, addr = memArr -- intentionally override local
+						if type(data) == "table" then
+							memArr = data.arr or memArr
+							addr = data[1]
+						else
+							addr = data
+						end
 						if what == "limit" then
 							memArr[addr + cmdSize] = memArr[addr + cmdSize] - arr.Limit + newCount
 						elseif what == "count" then
@@ -269,17 +264,18 @@ do
 
 	-- also important to finish checking references in range 0x11000-0x20000
 
+	-- 0x73C028 - text data ptrs, in order: npcdata, npc names, npcprof, npcnews, npctopic, npctext, (empty), npcgreeting, npcgroup
+
 	autohook(0x476CD5, function(d)
 		-- just loaded npcdata.txt, eax = data pointer, esi = space for processed data
-		local count = DataTables.ComputeRowCountInPChar(d.eax, 16, 16) - 2 -- todo: fix arguments
+		local count = DataTables.ComputeRowCountInPChar(d.eax, 6, 6) - 2 + 1 -- +1, because there is empty npc at the beginning
 		local newNpcDataAddress = mem.StaticAlloc(count * Game.NPCDataTxt.ItemSize)
 		d.esi = newNpcDataAddress
 		processReferencesTable("NPCDataTxt", newNpcDataAddress, count, npcDataRefs)
-		-- 0x73C028 - text data ptrs, in order: npcdata, npc names, npcprof, npcnews, npctopic, npctext, (empty), npcgreeting, npcgroup
 		asmpatch(0x476CDA, "mov [0x73C028], eax")
 		-- 0x739DC4 contains pointers to npcdata.txt npc names (Game.NPCNames is for random names)
 		asmpatch(0x476CEF, "mov eax, 0x739DC4")
-		asmpatch(0x476E1B, "mov dword ptr [0x73C014]," .. (count + 1))
+		asmpatch(0x476E1B, "mov dword ptr [0x73C014]," .. count)
 
 		-- here we have to use original ptr, because removeMapstatsLimit script apparently uses original address to calculate new data position
 		HookManager{origNpcdataPtr = 0x724050}.asmpatch(0x4774E9, [[
@@ -289,24 +285,38 @@ do
 
 		local newGameNpcAddress = mem.StaticAlloc(count * Game.NPC.ItemSize)
 		processReferencesTable("NPC", newGameNpcAddress, count, gameNpcRefs)
+
+		-- function resetting npc names
+		local hooks = HookManager{npcLimitPtr = 0x73C014, newNpcDataAddress = newNpcDataAddress, newGameNpcAddress = newGameNpcAddress, firstRealGameNpcAddress = newNpcDataAddress + Game.NPC.ItemSize, npcdataNpcNamePtrs = 0x739DC4}
+		hooks.asmpatch(0x476C68, "cmp dword ptr [%npcLimitPtr%],esi")
+		hooks.asmpatch(0x476C88, "cmp esi,dword ptr [%npcLimitPtr%]")
+		hooks.asmpatch(0x476C70, "mov edx,%firstRealGameNpcAddress%")
+		hooks.asmpatch(0x476C76, "mov eax, %npcdataNpcNamePtrs%")
+
+		-- fix NPC name pointers (they are based on where npcdata.txt content gets loaded)
+		-- mmextension doesn't preserve name changes, so I won't either
+
+		function events.BeforeLoadMap(wasInGame)
+			if not wasInGame then
+				for i, npc in Game.NPC do
+					u4[npc["?ptr"]] = u4[newNpcDataAddress + i * 0x4C]
+				end
+			end
+		end
 	end)
 
 	autohook2(0x476E25, function(d)
 		-- just loaded npcgreet.txt
-		--function findGreetIndexes(text) for k, v in Game.NPCGreet do for i, t in v do if t:match(text) then print(k, i); break end end end end
-		local count = DataTables.ComputeRowCountInPChar(d.eax, 3, 2) - 1
-		--d.esi = 0x724050
-		--processAddressTable("NPCGreet", newGreetingDataAddress, count, npc)
+		local count = DataTables.ComputeRowCountInPChar(d.eax, 1, 2) - 1
 		local newGreetingDataAddress = mem.StaticAlloc((count + 1) * Game.NPCGreet.ItemSize) -- +1, because there is empty entry at the beginning
 		d.esi = newGreetingDataAddress + 8 -- size of two editpchars (game gets address of entry it should write to)
-		processReferencesTable("NPCGreet", newGreetingDataAddress, count, npcGreetRefs) -- but mmextension gets real address
-		--mem.ChangeGameArray("NPCGreet", newGreetingDataAddress, count)
+		processReferencesTable("NPCGreet", newGreetingDataAddress, count + 1, npcGreetRefs) -- but mmextension gets real address
 		asmpatch(0x476E2C, "mov [0x73C044], eax") -- correct data pointer
 		asmpatch(0x476E38, "mov eax, esi")
 	end)
 
 	autohook2(0x476ECD, function(d)
-		local count = DataTables.ComputeRowCountInPChar(d.eax, 2, 2) - 1
+		local count = DataTables.ComputeRowCountInPChar(d.eax, 1, 2) - 1
 		local newNpcGroupAddress = mem.StaticAlloc(count * Game.NPCGroup.ItemSize)
 		d.esi = newNpcGroupAddress
 		processReferencesTable("NPCGroup", newNpcGroupAddress, count, npcGroupRefs)
@@ -315,7 +325,7 @@ do
 	end)
 
 	autohook2(0x476F66, function(d)
-		local count = DataTables.ComputeRowCountInPChar(d.eax, 2, 2) - 1
+		local count = DataTables.ComputeRowCountInPChar(d.eax, 1, 2) - 1
 		local newNpcNewsAddress = mem.StaticAlloc(count * Game.NPCNews.ItemSize)
 		d.esi = newNpcNewsAddress
 		processReferencesTable("NPCNews", newNpcNewsAddress, count, npcNewsRefs)
@@ -387,8 +397,8 @@ do
 	]], 0x16)
 
 	hook(mem.findcode(addr, NOP), function(d) -- load npctext
-		local newTextCount = DataTables.ComputeRowCountInPChar(d.eax, 2, 2) - 1
-		local newTopicCount = DataTables.ComputeRowCountInPChar(u4[npcTopicPtr], 2, 2) - 1
+		local newTextCount = DataTables.ComputeRowCountInPChar(d.eax, 1, 2) - 1
+		local newTopicCount = DataTables.ComputeRowCountInPChar(u4[npcTopicPtr], 1, 2) - 1
 
 		local count = max(newTopicCount, newTextCount)
 		local newSpacePtr = mem.StaticAlloc(count * 8)
@@ -419,6 +429,7 @@ do
 		520, mia lucille house
 		795, mia lucille house
 		947, grant valandir house
+		1011, map npc
 		1018, grant valandir house
 
 		custom greetings:
@@ -433,8 +444,9 @@ do
 		new npc topics (no ingame test, because evt limits not removed):
 		584, 591, 595, 602, 609
 
+		new npc text (no ingame test)
 		780, 799, 807
 	]]
+	--function showTopics() for i, v in Game.NPC[GetCurrentNPC()].Events do if v ~= 0 then print(v, Game.NPCTopic[v]) end end end
+	--function findGreetIndexes(text) for k, v in Game.NPCGreet do for i, t in v do if t:match(text) then print(k, i); break end end end end
 end
-
---print((Game.NPCDataTxt.?ptr - Game.NPCDataTxt[0].?size):tohex(), Game.Npc
