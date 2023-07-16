@@ -7,8 +7,8 @@ mem.dll.kernel32.SetDllDirectoryA("C:\\Users\\Eksekk\\source\\repos\\PGenEdit\\D
 function events.GameInitialized1()
 	-- speed up loading and unloading my dll by not unloading dependencies which don't change
 	-- (they won't unload because this increments reference count)
-	mem.LoadDll "wxmsw321ud_core_vc_custom.dll"
-	mem.LoadDll "wxbase321ud_vc_custom.dll"
+	--mem.LoadDll "wxmsw321ud_core_vc_custom.dll"
+	--mem.LoadDll "wxbase321ud_vc_custom.dll"
 end
 local runEventLoopOnce
 local getLuaState

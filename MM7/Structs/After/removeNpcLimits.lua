@@ -115,7 +115,7 @@ do
 	}
 
 	local npcDataRefs = {
-		[1] = {0x45F1D0, 0x4613B2, 0x465EBE, 0x491B1E}, -- 0x4646DD (cleanup tables) handled below
+		[1] = {0x45F1D0, 0x4613B2, 0x491B1E}, -- 0x4646DD (cleanup tables) handled below, 0x465EBE happens before tables are extended, no need to change it
 		size = { -- npc data size and game.npc size is same (at least should be)
 			[1] = {0x491B19}
 		},
@@ -260,7 +260,7 @@ do
 	-- need to either call function with old npc data ptr or patch all offset usages to use absolute address instead
 	-- alternatively, maybe don't call this function for npc data?
 
-	mem.nop2(0x4646DD, 0x4646E7) -- don't cleanup npc tables
+	asmpatch(0x4646DD, "mov ecx, 0x73C028 - 0x17FD8") -- game uses offsets from this value, so I subtract lowest among them
 
 	-- also important to finish checking references in range 0x11000-0x20000
 
@@ -287,22 +287,11 @@ do
 		processReferencesTable("NPC", newGameNpcAddress, count, gameNpcRefs)
 
 		-- function resetting npc names
-		local hooks = HookManager{npcLimitPtr = 0x73C014, newNpcDataAddress = newNpcDataAddress, newGameNpcAddress = newGameNpcAddress, firstRealGameNpcAddress = newNpcDataAddress + Game.NPC.ItemSize, npcdataNpcNamePtrs = 0x739DC4}
+		local hooks = HookManager{npcLimitPtr = 0x73C014, newNpcDataAddress = newNpcDataAddress, newGameNpcAddress = newGameNpcAddress, firstRealGameNpcAddress = newGameNpcAddress + Game.NPC.ItemSize, npcdataNpcNamePtrs = 0x739DC4}
 		hooks.asmpatch(0x476C68, "cmp dword ptr [%npcLimitPtr%],esi")
 		hooks.asmpatch(0x476C88, "cmp esi,dword ptr [%npcLimitPtr%]")
 		hooks.asmpatch(0x476C70, "mov edx,%firstRealGameNpcAddress%")
 		hooks.asmpatch(0x476C76, "mov eax, %npcdataNpcNamePtrs%")
-
-		-- fix NPC name pointers (they are based on where npcdata.txt content gets loaded)
-		-- mmextension doesn't preserve name changes, so I won't either
-
-		function events.BeforeLoadMap(wasInGame)
-			if not wasInGame then
-				for i, npc in Game.NPC do
-					u4[npc["?ptr"]] = u4[newNpcDataAddress + i * 0x4C]
-				end
-			end
-		end
 	end)
 
 	autohook2(0x476E25, function(d)
@@ -316,6 +305,7 @@ do
 	end)
 
 	autohook2(0x476ECD, function(d)
+		-- just loaded npcgroup.txt
 		local count = DataTables.ComputeRowCountInPChar(d.eax, 1, 2) - 1
 		local newNpcGroupAddress = mem.StaticAlloc(count * Game.NPCGroup.ItemSize)
 		d.esi = newNpcGroupAddress
@@ -325,6 +315,7 @@ do
 	end)
 
 	autohook2(0x476F66, function(d)
+		-- just loaded npcnews.txt
 		local count = DataTables.ComputeRowCountInPChar(d.eax, 1, 2) - 1
 		local newNpcNewsAddress = mem.StaticAlloc(count * Game.NPCNews.ItemSize)
 		d.esi = newNpcNewsAddress
@@ -334,6 +325,7 @@ do
 	end)
 
 	autohook(0x477088, function(d)
+		-- just loaded npcnames.txt
 		-- male/female count can be different, and need to fit all
 		local count = max(DataTables.ComputeRowCountInPChar(d.eax, 1, 1), DataTables.ComputeRowCountInPChar(d.eax, 1, 2)) - 1
 		local newSize = count * Game.NPCNames.ItemSize
