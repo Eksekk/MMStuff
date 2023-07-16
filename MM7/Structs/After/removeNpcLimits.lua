@@ -122,7 +122,7 @@ do
 	}
 
 	local npcDataRefs = {
-		[1] = {0x45F1D0, 0x4613B2, 0x4646DD, 0x465EBE, 0x491B1E},
+		[1] = {0x45F1D0, 0x4613B2, 0x465EBE, 0x491B1E}, -- 0x4646DD (cleanup tables) handled below
 		size = { -- npc data size and game.npc size is same (at least should be)
 			[1] = {0x491B19}
 		},
@@ -265,12 +265,14 @@ do
 	-- need to either call function with old npc data ptr or patch all offset usages to use absolute address instead
 	-- alternatively, maybe don't call this function for npc data?
 
+	mem.nop2(0x4646DD, 0x4646E7) -- don't cleanup npc tables
+
 	-- also important to finish checking references in range 0x11000-0x20000
 
 	autohook(0x476CD5, function(d)
 		-- just loaded npcdata.txt, eax = data pointer, esi = space for processed data
 		local count = DataTables.ComputeRowCountInPChar(d.eax, 16, 16) - 2 -- todo: fix arguments
-		local newNpcDataAddress = mem.allocMM(count * Game.NPCDataTxt.ItemSize)
+		local newNpcDataAddress = mem.StaticAlloc(count * Game.NPCDataTxt.ItemSize)
 		d.esi = newNpcDataAddress
 		processReferencesTable("NPCDataTxt", newNpcDataAddress, count, npcDataRefs)
 		-- 0x73C028 - text data ptrs, in order: npcdata, npc names, npcprof, npcnews, npctopic, npctext, (empty), npcgreeting, npcgroup
@@ -285,7 +287,7 @@ do
 			lea esi, [eax + %origNpcdataPtr%]
 		]])
 
-		local newGameNpcAddress = mem.allocMM(count * Game.NPC.ItemSize)
+		local newGameNpcAddress = mem.StaticAlloc(count * Game.NPC.ItemSize)
 		processReferencesTable("NPC", newGameNpcAddress, count, gameNpcRefs)
 	end)
 
@@ -295,7 +297,7 @@ do
 		local count = DataTables.ComputeRowCountInPChar(d.eax, 3, 2) - 1
 		--d.esi = 0x724050
 		--processAddressTable("NPCGreet", newGreetingDataAddress, count, npc)
-		local newGreetingDataAddress = mem.allocMM((count + 1) * Game.NPCGreet.ItemSize) -- +1, because there is empty entry at the beginning
+		local newGreetingDataAddress = mem.StaticAlloc((count + 1) * Game.NPCGreet.ItemSize) -- +1, because there is empty entry at the beginning
 		d.esi = newGreetingDataAddress + 8 -- size of two editpchars (game gets address of entry it should write to)
 		processReferencesTable("NPCGreet", newGreetingDataAddress, count, npcGreetRefs) -- but mmextension gets real address
 		--mem.ChangeGameArray("NPCGreet", newGreetingDataAddress, count)
@@ -305,7 +307,7 @@ do
 
 	autohook2(0x476ECD, function(d)
 		local count = DataTables.ComputeRowCountInPChar(d.eax, 2, 2) - 1
-		local newNpcGroupAddress = mem.allocMM(count * Game.NPCGroup.ItemSize)
+		local newNpcGroupAddress = mem.StaticAlloc(count * Game.NPCGroup.ItemSize)
 		d.esi = newNpcGroupAddress
 		processReferencesTable("NPCGroup", newNpcGroupAddress, count, npcGroupRefs)
 		asmpatch(0x476ED4, "mov [0x73C048],eax") -- correct data pointer
@@ -314,7 +316,7 @@ do
 
 	autohook2(0x476F66, function(d)
 		local count = DataTables.ComputeRowCountInPChar(d.eax, 2, 2) - 1
-		local newNpcNewsAddress = mem.allocMM(count * Game.NPCNews.ItemSize)
+		local newNpcNewsAddress = mem.StaticAlloc(count * Game.NPCNews.ItemSize)
 		d.esi = newNpcNewsAddress
 		processReferencesTable("NPCNews", newNpcNewsAddress, count, npcNewsRefs)
 		asmpatch(0x476F6D, "mov [0x73C034],eax") -- correct data pointer
@@ -325,7 +327,7 @@ do
 		-- male/female count can be different, and need to fit all
 		local count = max(DataTables.ComputeRowCountInPChar(d.eax, 1, 1), DataTables.ComputeRowCountInPChar(d.eax, 1, 2)) - 1
 		local newSize = count * Game.NPCNames.ItemSize
-		local newNpcNamesAddress = mem.StaticAlloc(newSize + 8) -- +8 for male/female count (u4)
+		local newNpcNamesAddress = mem.StaticAlloc(newSize)
 		mem.nop(0x47706A) -- don't calculate destination space before file has been loaded
 		mem.nop(0x477081) -- don't zero invalid field (because it's not calculated, see above)
 		asmpatch(0x47707B, "mov [0x73C010],ebx") -- zeroes Game.StreetNPC size
@@ -367,12 +369,12 @@ do
 	local NOP = string.char(0x90)
 	
 	local addr = topicTextHooks.asmpatch(0x47699B, [[
-		push ebx
+		push ebx ; is 0
 		push %npcTopicFileName%
 		mov ecx, %eventsLod%
 		call absolute %loadFileFromLod%
 		mov [%npcTopicPtr%], eax
-		push ebx ; is 0
+		push ebx
 		push %npcTextFileName%
 		mov ecx, %eventsLod%
 		call absolute %loadFileFromLod%
@@ -389,7 +391,7 @@ do
 		local newTopicCount = DataTables.ComputeRowCountInPChar(u4[npcTopicPtr], 2, 2) - 1
 
 		local count = max(newTopicCount, newTextCount)
-		local newSpacePtr = mem.allocMM(count * 8)
+		local newSpacePtr = mem.StaticAlloc(count * 8)
 
 		-- NPC TEXT
 
@@ -413,7 +415,26 @@ do
 
 	end)
 
+	--[[ custom NPCs:
+		520, mia lucille house
+		795, mia lucille house
+		947, grant valandir house
+		1018, grant valandir house
 
+		custom greetings:
+		208, 216
+
+		new npc groups:
+		51, 53, 55, 60
+
+		new npc news:
+		52, 54, 56
+
+		new npc topics (no ingame test, because evt limits not removed):
+		584, 591, 595, 602, 609
+
+		780, 799, 807
+	]]
 end
 
 --print((Game.NPCDataTxt.?ptr - Game.NPCDataTxt[0].?size):tohex(), Game.Npc
