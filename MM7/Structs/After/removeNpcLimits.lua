@@ -255,12 +255,9 @@ do
 		mem.prot()
 	end
 
-	-- HAVE TO ALLOCATE TABLES with allocMM, because game tries to free them at 0x47726A, causing crashes
-	-- FIXME: this function gets passed new npc data address instead of old, and tries to use offsets from it to get pointers to table contents
-	-- need to either call function with old npc data ptr or patch all offset usages to use absolute address instead
-	-- alternatively, maybe don't call this function for npc data?
-
-	asmpatch(0x4646DD, "mov ecx, 0x73C028 - 0x17FD8") -- game uses offsets from this value, so I subtract lowest among them
+	-- freeing tables
+	-- game uses offsets from this value, so I subtract lowest among them
+	asmpatch(0x4646DD, "mov ecx, 0x73C028 - 0x17FD8")
 
 	-- also important to finish checking references in range 0x11000-0x20000
 
