@@ -115,6 +115,53 @@ function replacePtrs(addrTable, newAddr, origin, cmdSize, check)
 	end
 end
 
+local function processReferencesTable(arrName, newAddress, newCount, addressTable)
+    local arr = Game[arrName]
+    local origin = arr["?ptr"]
+    local lowerBoundIncrease = (addressTable.lowerBoundIncrease or 0) * arr.ItemSize
+    addressTable.lowerBoundIncrease = nil -- eliminate special case in loop below
+    local oldMin, oldMax = origin - arr.ItemSize - lowerBoundIncrease, origin + arr.Size + arr.ItemSize
+    local newMin, newMax = newAddress - arr.ItemSize - lowerBoundIncrease, newAddress + arr.ItemSize * (newCount + 1)
+    local function check(old, new, cmdSize, i)
+        assert(old >= oldMin and old <= oldMax, format("[%s] old address 0x%X [cmdSize %d; array index %d] is outside array bounds [0x%X, 0x%X] (new entry count: %d)", arrName, old, cmdSize, i, oldMin, oldMax, newCount))
+        assert(new >= newMin and new <= newMax, format("[%s] new address 0x%X [cmdSize %d; array index %d] is outside array bounds [0x%X, 0x%X] (new entry count: %d)", arrName, new, cmdSize, i, newMin, newMax, newCount))
+    end
+    mem.prot(true)
+    for cmdSize, addresses in pairs(addressTable) do
+        if type(cmdSize) == "number" then
+            -- normal refs
+            replacePtrs(addresses, newAddress, origin, cmdSize, check)
+        else
+            -- special refs
+            local what = cmdSize
+            local memArr = addresses.arr or i4
+            for cmdSize, addresses in pairs(addresses) do
+                for i, data in ipairs(addresses) do
+                    -- support per-address mem array types
+                    local memArr, addr = memArr -- intentionally override local
+                    if type(data) == "table" then
+                        memArr = data.arr or memArr
+                        addr = data[1]
+                    else
+                        addr = data
+                    end
+                    if what == "limit" then
+                        memArr[addr + cmdSize] = memArr[addr + cmdSize] - arr.Limit + newCount
+                    elseif what == "count" then
+                        -- skip (I don't move count addresses atm)
+                    elseif what == "size" then
+                        memArr[addr + cmdSize] = arr.ItemSize * newCount
+                    elseif what == "End" then
+                        memArr[addr + cmdSize] = newAddress + arr.ItemSize * newCount
+                    end
+                end
+            end
+        end
+    end
+    mem.ChangeGameArray(arrName, newAddress, newCount)
+    mem.prot()
+end
+
 -- DataTables.ComputeRowCountInPChar(p, minCols, needCol)
 -- minCols is minimum cell count - if less, function stops reading file and returns current count
 -- if col #needCol is not empty, current count is updated to its index, otherwise nothing is done - meant to exclude empty entries at the end of some files
@@ -183,6 +230,9 @@ do
         },
         verify = {
             0x4256CE, 0x4256F7, 0x425987, 0x4259B0, 0x425C2A, 0x425C53
+        },
+        limit = {
+            [1] = {0x449852}
         }
     }
 
@@ -195,60 +245,13 @@ do
 		3) patch each place where files are loaded, allocating space for data, asmpatching some addresses to use new data, and replace all references with function call
 		4) test and fix all bugs you can find
 	]]
-
-	-- maybe unrelated addresses: 0x4764B4, 0x4BC81E, 0x4BC82C - reference 0x724048
 	
-	-- npc tables data range: 0x724004 - 0x73C027
-	
-	local gameNpcRefs = { -- [cmd offset] = {addresses...}
-        }
-
-	local function processReferencesTable(arrName, newAddress, newCount, addressTable)
-		local arr = Game[arrName]
-		local origin = arr["?ptr"]
-		local lowerBoundIncrease = (addressTable.lowerBoundIncrease or 0) * arr.ItemSize
-		addressTable.lowerBoundIncrease = nil -- eliminate special case in loop below
-		local oldMin, oldMax = origin - arr.ItemSize - lowerBoundIncrease, origin + arr.Size + arr.ItemSize
-		local newMin, newMax = newAddress - arr.ItemSize - lowerBoundIncrease, newAddress + arr.ItemSize * (newCount + 1)
-		local function check(old, new, cmdSize, i)
-			assert(old >= oldMin and old <= oldMax, format("[%s] old address 0x%X [cmdSize %d; array index %d] is outside array bounds [0x%X, 0x%X] (new entry count: %d)", arrName, old, cmdSize, i, oldMin, oldMax, newCount))
-			assert(new >= newMin and new <= newMax, format("[%s] new address 0x%X [cmdSize %d; array index %d] is outside array bounds [0x%X, 0x%X] (new entry count: %d)", arrName, new, cmdSize, i, newMin, newMax, newCount))
-		end
-		mem.prot(true)
-		for cmdSize, addresses in pairs(addressTable) do
-			if type(cmdSize) == "number" then
-				-- normal refs
-				replacePtrs(addresses, newAddress, origin, cmdSize, check)
-			else
-				-- special refs
-				local what = cmdSize
-				local memArr = addresses.arr or i4
-				for cmdSize, addresses in pairs(addresses) do
-					for i, data in ipairs(addresses) do
-						-- support per-address mem array types
-						local memArr, addr = memArr -- intentionally override local
-						if type(data) == "table" then
-							memArr = data.arr or memArr
-							addr = data[1]
-						else
-							addr = data
-						end
-						if what == "limit" then
-							memArr[addr + cmdSize] = memArr[addr + cmdSize] - arr.Limit + newCount
-						elseif what == "count" then
-							-- skip (I don't move count addresses atm)
-						elseif what == "size" then
-							memArr[addr + cmdSize] = arr.ItemSize * newCount
-						elseif what == "End" then
-							memArr[addr + cmdSize] = newAddress + arr.ItemSize * newCount
-						end
-					end
-				end
-			end
-		end
-		mem.ChangeGameArray(arrName, newAddress, newCount)
-		mem.prot()
-	end
+    -- various enchantment power ranges etc.
+	local otherItemDataRefs = {
+        [1] = {0x00425716, 0x00425734, 0x00425786, 0x004259ED, 0x00425A3F},
+        [2] = {0x00425710, 0x00425716, 0x004259C9, 0x004259CF, 0x00425C6C, 0x00425C72},
+        [3] = {0x004256B5, 0x0042596E, 0x00425C11},
+    }
 
     -- 0x6BA998 is scroll.txt contents
     autohook(0x468084, function(d)
@@ -260,55 +263,61 @@ do
         processReferencesTable("ScrollTxt", newScrollSpaceAddr, count, scrollTxtRefs)
     end)
 
-    -- MEMORY LAYOUT:
-    -- items.txt size, items.txt, stditems.txt, spcitems.txt
+    
+    -- ITEM DATA MEMORY LAYOUT:
+    -- items.txt size, items.txt, stditems.txt, spcitems.txt, 0x3918 placeholder bytes, potions.txt, 3 empty bytes, data pointers (items.txt, rnditems.txt, stditems.txt, spcitems.txt)
+    -- sum of all item chances for each of 6 treasure levels from rnditems.txt (0x56AADC, 6 dwords),
+    -- bonus chance by level from rnditems.txt (dword, level 1-6): standard, special, special% : 0x56AAF4, 18 dwords
+    -- std item bonus chances (column sums) : 0x56AB3C, 9 dwords
+    -- std bonus strength ranges: [min, max] for each treasure level: 0x56AB60, 12 dwords
+    -- spc item bonus chances (column sums): 0x56AB90, 12 dwords
+    -- spc items highest index (dword)
+    -- 0x20 zero bytes
 
     local tablePtrs = mem.StaticAlloc(12)
 
     local NOP = string.char(0x90)
 
-    autohook(0x448F8F, function(d)
-        -- just loaded items.txt
+    local dataPtrs = 0x56AACC -- data pointers
+    local hooks = HookManager{itemsTxtDataPtr = dataPtrs, stdItemsTxtDataPtr = dataPtrs + 8, spcItemsTxtDataPtrs = dataPtrs + 12, itemsTxtFileName = 0x4BFE04, stdItemsTxtFileName = 0x4BFCD8, spcItemsTxtFileName = 0x4BFCC8, iconsLod = Game.IconsLod["?ptr"], loadFileFromLod = 0x40C1A0}
 
-        -- ebx points at items.txt limit, ebx + 4 contains data
-        local dataPtrs = 0x56AACC -- data pointers: items.txt, rnditems.txt, stditems.txt, spcitems.txt
-        local hooks = HookManager{itemsTxtDataPtr = dataPtrs, stdItemsTxtDataPtr = dataPtrs + 8, spcItemsTxtDataPtrs = dataPtrs + 12, itemsTxtFileName = 0x4BFE04, stdItemsTxtFileName = 0x4BFCD8, spcItemsTxtFileName = 0x4BFCC8, iconsLod = Game.IconsLod["?ptr"], loadFileFromLod = 0x40C1A0}
+    -- load tables
+    local addr = hooks.asmpatch(0x448F79, [[
+        ; esi = 0
 
-        -- load tables
-        local addr = hooks.asmpatch(0x448F79, [[
-            ; esi = 0
+        ; items.txt
+        mov ecx, %iconsLod%
+        push esi
+        push %itemsTxtFileName%
+        call absolute %loadFileFromLod%
+        mov [%itemsTxtDataPtr%], eax
 
-            ; items.txt
-            mov ecx, %iconsLod%
-            push esi
-            push %itemsTxtFileName%
-            call absolute %loadFileFromLod%
-            mov [%itemsTxtDataPtr%], eax
+        ; stditems.txt
+        mov ecx, %iconsLod%
+        push esi
+        push %stdItemsTxtFileName%
+        call absolute %loadFileFromLod%
+        mov [%stdItemsTxtDataPtr%], eax
 
-            ; stditems.txt
-            mov ecx, %iconsLod%
-            push esi
-            push %stdItemsTxtFileName%
-            call absolute %loadFileFromLod%
-            mov [%stdItemsTxtDataPtr%], eax
+        ; spcitems.txt
+        mov ecx, %iconsLod%
+        push esi
+        push %spcItemsTxtFileName%
+        call absolute %loadFileFromLod%
+        mov [%spcItemsTxtDataPtr%], eax
 
-            ; spcitems.txt
-            mov ecx, %iconsLod%
-            push esi
-            push %spcItemsTxtFileName%
-            call absolute %loadFileFromLod%
-            mov [%spcItemsTxtDataPtr%], eax
-            nop
-            nop
-            nop
-            nop
-            nop
-        ]], 0x16)
+        nop
+        nop
+        nop
+        nop
+        nop
+    ]], 0x16)
 
-        hook(mem.findcode(addr, NOP), function(d)
-        
-        end)
-        
-        hooks.asmpatch(0x448F95, "mov dword ptr [%itemsTxtDataPtr%],eax")
+    hook(mem.findcode(addr, NOP), function(d)
+        local itemCount, stdItemCount, spcItemCount = DataTables.ComputeRowCountInPChar(u4[itemsTxtDataPtr], 16, 16) - 3,
+            DataTables.ComputeRowCountInPChar(u4[stdItemsTxtDataPtr], 1, 1) - 4, DataTables.ComputeRowCountInPChar(d.eax, 1, 2) - 11
+        debug.Message(format("items %d, std %d, spc %d", itemCount, stdItemCount, spcItemCount))
+
+        local newSpace = mem.StaticAlloc(itemCount * Game.ItemsTxt.ItemSize + stdItemCount * Game.StdItemsTxt.ItemSize)
     end)
 end
