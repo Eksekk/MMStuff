@@ -259,4 +259,56 @@ do
         local newScrollSpaceAddr = mem.StaticAlloc(count * 4) -- editpchar size
         processReferencesTable("ScrollTxt", newScrollSpaceAddr, count, scrollTxtRefs)
     end)
+
+    -- MEMORY LAYOUT:
+    -- items.txt size, items.txt, stditems.txt, spcitems.txt
+
+    local tablePtrs = mem.StaticAlloc(12)
+
+    local NOP = string.char(0x90)
+
+    autohook(0x448F8F, function(d)
+        -- just loaded items.txt
+
+        -- ebx points at items.txt limit, ebx + 4 contains data
+        local dataPtrs = 0x56AACC -- data pointers: items.txt, rnditems.txt, stditems.txt, spcitems.txt
+        local hooks = HookManager{itemsTxtDataPtr = dataPtrs, stdItemsTxtDataPtr = dataPtrs + 8, spcItemsTxtDataPtrs = dataPtrs + 12, itemsTxtFileName = 0x4BFE04, stdItemsTxtFileName = 0x4BFCD8, spcItemsTxtFileName = 0x4BFCC8, iconsLod = Game.IconsLod["?ptr"], loadFileFromLod = 0x40C1A0}
+
+        -- load tables
+        local addr = hooks.asmpatch(0x448F79, [[
+            ; esi = 0
+
+            ; items.txt
+            mov ecx, %iconsLod%
+            push esi
+            push %itemsTxtFileName%
+            call absolute %loadFileFromLod%
+            mov [%itemsTxtDataPtr%], eax
+
+            ; stditems.txt
+            mov ecx, %iconsLod%
+            push esi
+            push %stdItemsTxtFileName%
+            call absolute %loadFileFromLod%
+            mov [%stdItemsTxtDataPtr%], eax
+
+            ; spcitems.txt
+            mov ecx, %iconsLod%
+            push esi
+            push %spcItemsTxtFileName%
+            call absolute %loadFileFromLod%
+            mov [%spcItemsTxtDataPtr%], eax
+            nop
+            nop
+            nop
+            nop
+            nop
+        ]], 0x16)
+
+        hook(mem.findcode(addr, NOP), function(d)
+        
+        end)
+        
+        hooks.asmpatch(0x448F95, "mov dword ptr [%itemsTxtDataPtr%],eax")
+    end)
 end
