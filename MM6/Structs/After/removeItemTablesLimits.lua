@@ -156,6 +156,8 @@ local function processReferencesTable(arrName, newAddress, newCount, addressTabl
                         memArr[addr + cmdSize] = memArr[addr + cmdSize] - arr.Limit + newCount
                     elseif what == "count" then
                         -- skip (I don't move count addresses atm)
+                    elseif what == "high" then
+                        memArr[addr + cmdSize] = newCount - 1
                     elseif what == "size" then
                         memArr[addr + cmdSize] = arr.ItemSize * newCount
                     elseif what == "End" then
@@ -214,7 +216,10 @@ do
 
     local spcItemsTxtRefs = {
         [2] = {0x0042574E, 0x00425A07},
-        [3] = {0x0041CB6E, 0x0042576C, 0x004257C6, 0x0042580C, 0x00425A25, 0x00425A7F, 0x00425AC5, 0x00448640, 0x00448754}
+        [3] = {0x0041CB6E, 0x0042576C, 0x004257C6, 0x0042580C, 0x00425A25, 0x00425A7F, 0x00425AC5, 0x00448640, 0x00448754},
+        high = {
+            [6] = {0x449ECB, arr = u1}
+        }
     }
 
     local stdItemsTxtRefs = {
@@ -239,7 +244,7 @@ do
             0x4256CE, 0x4256F7, 0x425987, 0x4259B0, 0x425C2A, 0x425C53
         },
         limit = {
-            [1] = {0x449852}
+            [1] = {0x449852, 0x40FEC3}
         }
     }
 
@@ -264,7 +269,7 @@ do
     -- various enchantment power ranges etc. and relative offsets from item data start
 	local otherItemDataRefs = {
         [1] = {0x00425716, 0x00425734, 0x00425786, 0x004259ED, 0x00425A3F},
-        [2] = {0x00425710, 0x00425716, 0x004259C9, 0x004259CF, 0x00425C6C, 0x00425C72, 0x00448F95, 0x004496C8, 0x00449835, {arr = u1, 0x00449846}, 0x0044991E, 0x00449932, 0x00449946, 0x0044996B, 0x0044997F, 0x00449993, 0x004499B8, 0x004499CC, 0x004499E0, 0x00449A05, 0x00449A19, 0x00449A2D, 0x00449A4B, 0x00449A5C, 0x00449A6D, 0x00449A8B, 0x00449A9C, 0x00449AAD, 0x00449AFF, 0x00449B31, 0x00449C32, 0x00449C3C, 0x004465DE},
+        [2] = {0x00425710, 0x00425716, 0x004259C9, 0x004259CF, 0x00425C6C, 0x00425C72, 0x00448F95, 0x004496C8, 0x00449835, {arr = u1, 0x00449846}, 0x0044991E, 0x00449932, 0x00449946, 0x0044996B, 0x0044997F, 0x00449993, 0x004499B8, 0x004499CC, 0x004499E0, 0x00449A05, 0x00449A19, 0x00449A2D, 0x00449A4B, 0x00449A5C, 0x00449A6D, 0x00449A8B, 0x00449A9C, 0x00449AAD, 0x00449AFF, 0x00449B31, 0x00449C32, 0x00449C3C, 0x004465DE, 0x00449D43, 0x00449D75, 0x00449EC1, 0x00449ECB, 0x00449ED5, 0x00449EDD, 0x00449EF4},
         [3] = {0x004256B5, 0x0042596E, 0x00425C11},
     }
 
@@ -342,10 +347,10 @@ do
     hook(mem.findcode(addr, NOP), function(d)
         local itemCount, stdItemCount, spcItemCount = DataTables.ComputeRowCountInPChar(u4[itemsTxtDataPtr], 16, 16) - 3,
             DataTables.ComputeRowCountInPChar(u4[stdItemsTxtDataPtr], 1, 1) - 4, DataTables.ComputeRowCountInPChar(d.eax, 1, 2) - 11
-        local useItemsCount = DataTables.ComputeRowCountInPChar(u4[useItemsTxtDataPtr], 0, 2) - 9
-        debug.Message(format("items %d, std %d, spc %d", itemCount, stdItemCount, spcItemCount))
+        local potionTxtCount = DataTables.ComputeRowCountInPChar(u4[useItemsTxtDataPtr], 0, 2) - 9 -- the file for this is useItems.txt
+        debug.Message(format("items %d, std %d, spc %d, potion %d", itemCount, stdItemCount, spcItemCount))
 
-        local itemsSize, stdItemsSize, spcItemsSize, potionTxtSize = itemCount * Game.ItemsTxt.ItemSize, stdItemCount * Game.StdItemsTxt.ItemSize, spcItemCount * Game.SpcItemsTxt.ItemSize, useItemsCount * useItemsCount
+        local itemsSize, stdItemsSize, spcItemsSize, potionTxtSize = itemCount * Game.ItemsTxt.ItemSize, stdItemCount * Game.StdItemsTxt.ItemSize, spcItemCount * Game.SpcItemsTxt.ItemSize, potionTxtCount * potionTxtCount
         local newSpace = mem.StaticAlloc(itemsSize + stdItemsSize + spcItemsSize + potionTxtSize + 0x3A38)
         local itemsOffset = newSpace + 4
         local stdItemsOffset = itemsOffset + itemsSize
@@ -371,7 +376,7 @@ do
         processReferencesTable("ItemsTxt", itemsOffset, itemCount, itemsTxtRefs)
         processReferencesTable("StdItemsTxt", stdItemsOffset, stdItemCount, stdItemsTxtRefs)
         processReferencesTable("SpcItemsTxt", spcItemsOffset, spcItemCount, spcItemsTxtRefs)
-        processReferencesTable("PotionTxt", potionTxtOffset, useItemsCount, potionTxtRefs)
+        processReferencesTable("PotionTxt", potionTxtOffset, potionTxtCount, potionTxtRefs)
 
         local maxOldOff, maxNewOff = 0
         for offset, shift in pairs(breakpoints) do
@@ -412,8 +417,9 @@ do
         asmpatch(0x448F79, "mov eax, " .. u4[itemsTxtDataPtr], 0x16)
         asmpatch(0x4496AC, "mov eax, " .. u4[rndItemsTxtDataPtr], 0x16)
         asmpatch(0x449ADE, "mov eax, " .. u4[stdItemsTxtDataPtr], 0x1B)
+        asmpatch(0x449D22, "mov eax, " .. u4[spcItemsTxtDataPtr], 0x1B)
 
-        -- check table loading code
         -- size, limit, count, end? refs
+        -- GAME EXIT CLEANUP FUNCTION
     end)
 end
