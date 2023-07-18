@@ -215,16 +215,19 @@ do
     }
 
     local spcItemsTxtRefs = {
-        [2] = {0x0042574E, 0x00425A07},
-        [3] = {0x0041CB6E, 0x0042576C, 0x004257C6, 0x0042580C, 0x00425A25, 0x00425A7F, 0x00425AC5, 0x00448640, 0x00448754},
+        [2] = {0x42574E, 0x425A07},
+        [3] = {0x41CB6E, 0x42576C, 0x4257C6, 0x42580C, 0x425A25, 0x425A7F, 0x425AC5, 0x448640, 0x448754},
         high = {
             [6] = {0x449ECB, arr = u1}
         }
     }
 
     local stdItemsTxtRefs = {
-        [2] = {0x004256CE, 0x00425987, 0x00425C2A},
-        [3] = {0x0041CB34, 0x004256F7, 0x004259B0, 0x00425C53, 0x0044870B}
+        [2] = {0x4256CE, 0x425987, 0x425C2A},
+        [3] = {0x41CB34, 0x4256F7, 0x4259B0, 0x425C53, 0x44870B},
+        limit = {
+            [1] = {0x00425734, 0x425786, 0x004259ED, 0x00425A3F}
+        }
     }
 
     local itemsTxtRefs = {
@@ -244,18 +247,19 @@ do
             0x4256CE, 0x4256F7, 0x425987, 0x4259B0, 0x425C2A, 0x425C53
         },
         limit = {
-            [1] = {0x449852, 0x40FEC3}
+            [1] = {0x449852, 0x40FEC3, 0x448968, 0x448CDA, 0x449852},
+            [2] = {0x44966C, 0x449678, 0x449805, 0x44A6F4, 0x44A6F4}
         }
     }
 
     -- rnditems.txt is ChanceByLevel field of ItemsTxtItem
 
     local itemDataOffsetRefs = {
-        [1] = {0x4218DB, 0x0043E050, 0x00450D39, 0x004528BD, 0x00452970, 0x004532B2, 0x00453800, 0x00454290, 0x00454B62, 0x00456192, 0x004564F2, 0x0045664C,
-            -- 0x00457C66, -- this one is skipped, because it's used before new space is allocated
-            0x00458A2D, 0x00458B53, 0x004857C2, 0x0049FCDD, 0x0049FEDD
+        [1] = {0x4218DB, 0x43E050, 0x450D39, 0x4528BD, 0x452970, 0x4532B2, 0x453800, 0x454290, 0x454B62, 0x456192, 0x4564F2, 0x45664C,
+            -- 0x457C66, -- this one is skipped, because it's used before new space is allocated
+            0x458A2D, 0x458B53, 0x4857C2, 0x49FCDD, 0x49FEDD
         },
-        [2] = {0x0042AAF5, 0x0044A61B, 0x0044A630, 0x0044A645, 0x0044A65A, 0x0044A66F, 0x0044A683, 0x0044A692, 0x0044A69E}
+        [2] = {0x42AAF5, 0x44A61B, 0x44A630, 0x44A645, 0x44A65A, 0x44A66F, 0x44A683, 0x44A692, 0x44A69E}
     }
 
 	--[[
@@ -268,9 +272,9 @@ do
 	
     -- various enchantment power ranges etc. and relative offsets from item data start
 	local otherItemDataRefs = {
-        [1] = {0x00425716, 0x00425734, 0x00425786, 0x004259ED, 0x00425A3F},
-        [2] = {0x00425710, 0x00425716, 0x004259C9, 0x004259CF, 0x00425C6C, 0x00425C72, 0x00448F95, 0x004496C8, 0x00449835, {arr = u1, 0x00449846}, 0x0044991E, 0x00449932, 0x00449946, 0x0044996B, 0x0044997F, 0x00449993, 0x004499B8, 0x004499CC, 0x004499E0, 0x00449A05, 0x00449A19, 0x00449A2D, 0x00449A4B, 0x00449A5C, 0x00449A6D, 0x00449A8B, 0x00449A9C, 0x00449AAD, 0x00449AFF, 0x00449B31, 0x00449C32, 0x00449C3C, 0x004465DE, 0x00449D43, 0x00449D75, 0x00449EC1, 0x00449ECB, 0x00449ED5, 0x00449EDD, 0x00449EF4},
-        [3] = {0x004256B5, 0x0042596E, 0x00425C11},
+        [1] = {0x425716, 0x425734, 0x425786, 0x4259ED, 0x425A3F},
+        [2] = {0x425710, 0x425716, 0x4259C9, 0x4259CF, 0x425C6C, 0x425C72, 0x448F95, 0x4496C8, 0x449835, {arr = u1, 0x449846}, 0x44991E, 0x449932, 0x449946, 0x44996B, 0x44997F, 0x449993, 0x4499B8, 0x4499CC, 0x4499E0, 0x449A05, 0x449A19, 0x449A2D, 0x449A4B, 0x449A5C, 0x449A6D, 0x449A8B, 0x449A9C, 0x449AAD, 0x449AFF, 0x449B31, 0x449C32, 0x449C3C, 0x4465DE, 0x449D43, 0x449D75, 0x449EC1, 0x449ECB, 0x449ED5, 0x449EDD, 0x449EF4},
+        [3] = {0x4256B5, 0x42596E, 0x425C11},
     }
 
     -- 0x6BA998 is scroll.txt contents
@@ -290,6 +294,7 @@ do
     -- std item bonus chances (column sums) : 0x56AB3C, 9 dwords
     -- std bonus strength ranges: [min, max] for each treasure level: 0x56AB60, 12 dwords
     -- spc item bonus chances (column sums): 0x56AB90, 12 dwords
+    -- 0x8 zero bytes
     -- spc items highest index (dword)
     -- 0x20 zero bytes
 
@@ -351,12 +356,13 @@ do
         debug.Message(format("items %d, std %d, spc %d, potion %d", itemCount, stdItemCount, spcItemCount))
 
         local itemsSize, stdItemsSize, spcItemsSize, potionTxtSize = itemCount * Game.ItemsTxt.ItemSize, stdItemCount * Game.StdItemsTxt.ItemSize, spcItemCount * Game.SpcItemsTxt.ItemSize, potionTxtCount * potionTxtCount
-        local newSpace = mem.StaticAlloc(itemsSize + stdItemsSize + spcItemsSize + potionTxtSize + 0x3A38)
+        local newSpace = mem.StaticAlloc(itemsSize + stdItemsSize + spcItemsSize + potionTxtSize + 0x3A40)
         local itemsOffset = newSpace + 4
         local stdItemsOffset = itemsOffset + itemsSize
         local spcItemsOffset = stdItemsOffset + stdItemsSize
         local potionTxtOffset = spcItemsOffset + spcItemsSize + 0x3918
 
+        -- keys are values after which value needs to be added to data offset (requires summing all of those that are passed)
         local breakpoints = {}
         do
             local gameArrays = {4, {Game.ItemsTxt, itemsSize}, {Game.StdItemsTxt, stdItemsSize}, {Game.SpcItemsTxt, spcItemsSize}, 0x3918, {Game.PotionTxt, potionTxtSize}}
@@ -414,10 +420,25 @@ do
             mov [esp + 0x18], ebx
         ]])
 
+        -- use already loaded tables' data
         asmpatch(0x448F79, "mov eax, " .. u4[itemsTxtDataPtr], 0x16)
         asmpatch(0x4496AC, "mov eax, " .. u4[rndItemsTxtDataPtr], 0x16)
         asmpatch(0x449ADE, "mov eax, " .. u4[stdItemsTxtDataPtr], 0x1B)
         asmpatch(0x449D22, "mov eax, " .. u4[spcItemsTxtDataPtr], 0x1B)
+
+        -- generate item function stuff
+        local itemBuf = mem.StaticAlloc(itemCount * 4)
+        asmpatch(0x44896F, "mov edi, " .. itemBuf)
+        asmpatch(0x44897A, "mov ecx, " .. itemBuf)
+        asmpatch(0x448A3F, "mov eax, [" .. itemBuf .. "]")
+        asmpatch(0x448A60, "mov edi, " .. itemBuf)
+        asmpatch(0x448CE1, "mov edi, " .. itemBuf)
+        asmpatch(0x448CFB, "mov edx, " .. itemBuf)
+        asmpatch(0x448E25, "mov eax, [" .. itemBuf .. "]")
+        asmpatch(0x448E60, "mov eax, " .. itemBuf)
+
+        -- 0x448A1F, 0x4497F9, 0x44A70A CONTAIN HIGH OF ITEMS ABLE TO BE GENERATED EXCEPT ARTIFACTS (0x190, 400)
+        -- 0x44A6E1 contains last artifact index
 
         -- size, limit, count, end? refs
         -- GAME EXIT CLEANUP FUNCTION
