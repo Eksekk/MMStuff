@@ -108,8 +108,9 @@ end
 
 function replacePtrs(t) -- addrTable, newAddr, origin, cmdSize, check)
     local func = t.func
+    local arr = t.arr or u4
 	for i, oldAddr in ipairs(t.addrTable) do
-		local old = u4[oldAddr + t.cmdSize]
+		local old = arr[oldAddr + t.cmdSize]
         local new
         if func then
             new = func(old)
@@ -117,7 +118,7 @@ function replacePtrs(t) -- addrTable, newAddr, origin, cmdSize, check)
 		    new = t.newAddr - (t.origin - old)
         end
 		t.check(old, new, t.cmdSize, i)
-		u4[oldAddr + t.cmdSize] = new
+		arr[oldAddr + t.cmdSize] = new
 	end
 end
 
@@ -260,10 +261,10 @@ do
 		4) test and fix all bugs you can find
 	]]
 	
-    -- various enchantment power ranges etc.
+    -- various enchantment power ranges etc. and relative offsets from item data start
 	local otherItemDataRefs = {
         [1] = {0x00425716, 0x00425734, 0x00425786, 0x004259ED, 0x00425A3F},
-        [2] = {0x00425710, 0x00425716, 0x004259C9, 0x004259CF, 0x00425C6C, 0x00425C72},
+        [2] = {0x00425710, 0x00425716, 0x004259C9, 0x004259CF, 0x00425C6C, 0x00425C72, 0x00448F95, 0x004496C8, 0x00449835, {arr = u1, 0x00449846}, 0x0044991E, 0x00449932, 0x00449946, 0x0044996B, 0x0044997F, 0x00449993, 0x004499B8, 0x004499CC, 0x004499E0, 0x00449A05, 0x00449A19, 0x00449A2D, 0x00449A4B, 0x00449A5C, 0x00449A6D, 0x00449A8B, 0x00449A9C, 0x00449AAD, 0x00449AFF, 0x00449B31, 0x00449C32, 0x00449C3C, 0x004465DE},
         [3] = {0x004256B5, 0x0042596E, 0x00425C11},
     }
 
@@ -290,37 +291,43 @@ do
     local NOP = string.char(0x90)
 
     local dataPtrs = 0x56AACC -- data pointers
-    local itemsTxtDataPtr, stdItemsTxtDataPtr, spcItemsTxtDataPtr, useItemsTxtDataPtr = dataPtrs, dataPtrs + 8, dataPtrs + 12, 0x56F470
-    local hooks = HookManager{itemsTxtDataPtr = itemsTxtDataPtr, stdItemsTxtDataPtr = stdItemsTxtDataPtr, spcItemsTxtDataPtr = spcItemsTxtDataPtr, useItemsTxtDataPtr = useItemsTxtDataPtr, itemsTxtFileName = 0x4BFE04, stdItemsTxtFileName = 0x4BFCD8, spcItemsTxtFileName = 0x4BFCC8, iconsLod = Game.IconsLod["?ptr"], loadFileFromLod = 0x40C1A0, useItemsTxtFileName = 0x4BF9BC}
+    local itemsTxtDataPtr, rndItemsDataPtr, stdItemsTxtDataPtr, spcItemsTxtDataPtr, useItemsTxtDataPtr = dataPtrs, dataPtrs + 4, dataPtrs + 8, dataPtrs + 12, 0x56F470
+    local hooks = HookManager{itemsTxtDataPtr = itemsTxtDataPtr, stdItemsTxtDataPtr = stdItemsTxtDataPtr, spcItemsTxtDataPtr = spcItemsTxtDataPtr, useItemsTxtDataPtr = useItemsTxtDataPtr, itemsTxtFileName = 0x4BFE04, stdItemsTxtFileName = 0x4BFCD8, spcItemsTxtFileName = 0x4BFCC8, iconsLod = Game.IconsLod["?ptr"], loadFileFromLod = 0x40C1A0, useItemsTxtFileName = 0x4BF9BC, rndItemsTxtFileName = 0x4BFCE8}
     do return end
-    -- load tables
-    local addr = hooks.asmpatch(0x448F79, [[
-        ; esi = 0
 
+    -- load tables
+    local addr = hooks.asmpatch(0x448654D, [[
         ; items.txt
         mov ecx, %iconsLod%
-        push esi
+        push 0
         push %itemsTxtFileName%
         call absolute %loadFileFromLod%
         mov [%itemsTxtDataPtr%], eax
 
+        ; rnditems.txt
+        mov ecx, %iconsLod%
+        push 0
+        push %rndItemsTxtFileName%
+        call absolute %loadFileFromLod%
+        mov [%rndItemsTxtDataPtr%], eax
+
         ; useitems.txt
         mov ecx, %iconsLod%
-        push esi
+        push 0
         push %useItemsTxtFileName%
         call absolute %loadFileFromLod%
         mov [%useItemsTxtDataPtr%], eax
 
         ; stditems.txt
         mov ecx, %iconsLod%
-        push esi
+        push 0
         push %stdItemsTxtFileName%
         call absolute %loadFileFromLod%
         mov [%stdItemsTxtDataPtr%], eax
 
         ; spcitems.txt
         mov ecx, %iconsLod%
-        push esi
+        push 0
         push %spcItemsTxtFileName%
         call absolute %loadFileFromLod%
         mov [%spcItemsTxtDataPtr%], eax
@@ -378,7 +385,7 @@ do
             assert(new >= 0 and old <= maxNewOff, format("New item data offset 0x%X is outside bounds [0, 0x%X]", new, maxNewOff))
         end
 
-        local function getShift(old)
+        local function getNewDataOffset(old)
             local val = old
             for offset, shift in pairs(breakpoints) do
                 if old >= offset then
@@ -388,8 +395,23 @@ do
             return val
         end
 
-        -- ebx points at start of data (items.txt size field)
-        d.ebx = newSpace
+        for cmdSize, addresses in pairs(itemDataOffsetRefs) do
+            replacePtrs{addrTable = addresses, cmdSize = cmdSize, func = getNewDataOffset, check = check}
+        end
+
+        -- esi points at start of data (items.txt size field)
+        d.esi = newSpace
+
+        -- correct base pointer
+        hooks.ref.newSpace = newSpace
+        hooks.asmhook(0x448F6B, [[
+            mov ebx, %newSpace%
+            mov [esp + 0x18], ebx
+        ]])
+
+        asmpatch(0x448F79, "mov eax, " .. u4[itemsTxtDataPtr], 0x16)
+        asmpatch(0x4496AC, "mov eax, " .. u4[rndItemsTxtDataPtr], 0x16)
+        asmpatch(0x449ADE, "mov eax, " .. u4[stdItemsTxtDataPtr], 0x1B)
 
         -- check table loading code
         -- size, limit, count, end? refs
