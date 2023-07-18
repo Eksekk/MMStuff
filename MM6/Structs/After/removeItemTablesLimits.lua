@@ -219,15 +219,15 @@ do
         [3] = {0x41CB6E, 0x42576C, 0x4257C6, 0x42580C, 0x425A25, 0x425A7F, 0x425AC5, 0x448640, 0x448754},
         high = {
             [6] = {0x449ECB, arr = u1}
+        },
+        limit = {
+            [1] = {0x00425734, 0x425786, 0x004259ED, 0x00425A3F}
         }
     }
 
     local stdItemsTxtRefs = {
         [2] = {0x4256CE, 0x425987, 0x425C2A},
         [3] = {0x41CB34, 0x4256F7, 0x4259B0, 0x425C53, 0x44870B},
-        limit = {
-            [1] = {0x00425734, 0x425786, 0x004259ED, 0x00425A3F}
-        }
     }
 
     local itemsTxtRefs = {
@@ -244,11 +244,11 @@ do
             0x41FFA4, 0x4208E1, 0x44C2F0, 0x45609A, 0x4561B0, 0x45625A, 0x46CC95, 0x48B2F3
         },
         verify = {
-            0x4256CE, 0x4256F7, 0x425987, 0x4259B0, 0x425C2A, 0x425C53
+            0x4256F7, 0x425987, 0x4259B0, 0x425C2A, 0x425C53
         },
         limit = {
-            [1] = {0x449852, 0x40FEC3, 0x448968, 0x448CDA, 0x449852},
-            [2] = {0x44966C, 0x449678, 0x449805, 0x44A6F4, 0x44A6F4}
+            [1] = {0x449852, 0x40FEC3, 0x448968, 0x448CDA},
+            [2] = {0x44966C, 0x449678, 0x449805, 0x44A6F4}
         }
     }
 
@@ -259,7 +259,8 @@ do
             -- 0x457C66, -- this one is skipped, because it's used before new space is allocated
             0x458A2D, 0x458B53, 0x4857C2, 0x49FCDD, 0x49FEDD
         },
-        [2] = {0x42AAF5, 0x44A61B, 0x44A630, 0x44A645, 0x44A65A, 0x44A66F, 0x44A683, 0x44A692, 0x44A69E}
+        [2] = {0x42AAF5, 0x44A61B, 0x44A630, 0x44A645, 0x44A65A, 0x44A66F, 0x44A683, 0x44A692, 0x44A69E},
+        [3] = {0x448C3B, 0x00448C4F}
     }
 
 	--[[
@@ -440,7 +441,12 @@ do
         -- 0x448A1F, 0x4497F9, 0x44A70A CONTAIN HIGH OF ITEMS ABLE TO BE GENERATED EXCEPT ARTIFACTS (0x190, 400)
         -- 0x44A6E1 contains last artifact index
 
-        -- size, limit, count, end? refs
+        -- size: std done, spc done, items done, potion done, scroll done
+        -- limit: 
+        ------ hardcoded: scroll done, potion done, spc done, std done (?), items done (absolute limit, remaining: possible to generate (0x190) and artifacts and below (.429))
+        ------ address of variable:
+        -- count:
+        -- end: 
         -- GAME EXIT CLEANUP FUNCTION
     end)
 end
