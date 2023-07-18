@@ -106,12 +106,18 @@ function processRawAddresses(arrayName)
     --print(text)
 end
 
-function replacePtrs(addrTable, newAddr, origin, cmdSize, check)
-	for i, oldAddr in ipairs(addrTable) do
-		local old = u4[oldAddr + cmdSize]
-		local new = newAddr - (origin - old)
-		check(old, new, cmdSize, i)
-		u4[oldAddr + cmdSize] = new
+function replacePtrs(t) -- addrTable, newAddr, origin, cmdSize, check)
+    local func = t.func
+	for i, oldAddr in ipairs(t.addrTable) do
+		local old = u4[oldAddr + t.cmdSize]
+        local new
+        if func then
+            new = func(old)
+        else
+		    new = t.newAddr - (t.origin - old)
+        end
+		t.check(old, new, t.cmdSize, i)
+		u4[oldAddr + t.cmdSize] = new
 	end
 end
 
@@ -130,7 +136,7 @@ local function processReferencesTable(arrName, newAddress, newCount, addressTabl
     for cmdSize, addresses in pairs(addressTable) do
         if type(cmdSize) == "number" then
             -- normal refs
-            replacePtrs(addresses, newAddress, origin, cmdSize, check)
+            replacePtrs{addrTable = addresses, newAddr = newAddress, origin = origin, cmdSize = cmdSize, check = check}
         else
             -- special refs
             local what = cmdSize
@@ -238,6 +244,14 @@ do
 
     -- rnditems.txt is ChanceByLevel field of ItemsTxtItem
 
+    local itemDataOffsetRefs = {
+        [1] = {0x4218DB, 0x0043E050, 0x00450D39, 0x004528BD, 0x00452970, 0x004532B2, 0x00453800, 0x00454290, 0x00454B62, 0x00456192, 0x004564F2, 0x0045664C,
+            -- 0x00457C66, -- this one is skipped, because it's used before new space is allocated
+            0x00458A2D, 0x00458B53, 0x004857C2, 0x0049FCDD, 0x0049FEDD
+        },
+        [2] = {0x0042AAF5, 0x0044A61B, 0x0044A630, 0x0044A645, 0x0044A65A, 0x0044A66F, 0x0044A683, 0x0044A692, 0x0044A69E}
+    }
+
 	--[[
 		REMOVE LIMITS WORKFLOW:
 		1) generate above text to facilitate finding references
@@ -263,9 +277,8 @@ do
         processReferencesTable("ScrollTxt", newScrollSpaceAddr, count, scrollTxtRefs)
     end)
 
-    
     -- ITEM DATA MEMORY LAYOUT:
-    -- items.txt size, items.txt, stditems.txt, spcitems.txt, 0x3918 placeholder bytes, potions.txt, 3 empty bytes, data pointers (items.txt, rnditems.txt, stditems.txt, spcitems.txt)
+    -- items.txt size, items.txt, stditems.txt, spcitems.txt, 0x3918 placeholder bytes, potions.txt, 4 empty bytes, data pointers (items.txt, rnditems.txt, stditems.txt, spcitems.txt)
     -- sum of all item chances for each of 6 treasure levels from rnditems.txt (0x56AADC, 6 dwords),
     -- bonus chance by level from rnditems.txt (dword, level 1-6): standard, special, special% : 0x56AAF4, 18 dwords
     -- std item bonus chances (column sums) : 0x56AB3C, 9 dwords
@@ -274,13 +287,12 @@ do
     -- spc items highest index (dword)
     -- 0x20 zero bytes
 
-    local tablePtrs = mem.StaticAlloc(12)
-
     local NOP = string.char(0x90)
 
     local dataPtrs = 0x56AACC -- data pointers
-    local hooks = HookManager{itemsTxtDataPtr = dataPtrs, stdItemsTxtDataPtr = dataPtrs + 8, spcItemsTxtDataPtrs = dataPtrs + 12, itemsTxtFileName = 0x4BFE04, stdItemsTxtFileName = 0x4BFCD8, spcItemsTxtFileName = 0x4BFCC8, iconsLod = Game.IconsLod["?ptr"], loadFileFromLod = 0x40C1A0}
-
+    local itemsTxtDataPtr, stdItemsTxtDataPtr, spcItemsTxtDataPtr, useItemsTxtDataPtr = dataPtrs, dataPtrs + 8, dataPtrs + 12, 0x56F470
+    local hooks = HookManager{itemsTxtDataPtr = itemsTxtDataPtr, stdItemsTxtDataPtr = stdItemsTxtDataPtr, spcItemsTxtDataPtr = spcItemsTxtDataPtr, useItemsTxtDataPtr = useItemsTxtDataPtr, itemsTxtFileName = 0x4BFE04, stdItemsTxtFileName = 0x4BFCD8, spcItemsTxtFileName = 0x4BFCC8, iconsLod = Game.IconsLod["?ptr"], loadFileFromLod = 0x40C1A0, useItemsTxtFileName = 0x4BF9BC}
+    do return end
     -- load tables
     local addr = hooks.asmpatch(0x448F79, [[
         ; esi = 0
@@ -291,6 +303,13 @@ do
         push %itemsTxtFileName%
         call absolute %loadFileFromLod%
         mov [%itemsTxtDataPtr%], eax
+
+        ; useitems.txt
+        mov ecx, %iconsLod%
+        push esi
+        push %useItemsTxtFileName%
+        call absolute %loadFileFromLod%
+        mov [%useItemsTxtDataPtr%], eax
 
         ; stditems.txt
         mov ecx, %iconsLod%
@@ -316,8 +335,63 @@ do
     hook(mem.findcode(addr, NOP), function(d)
         local itemCount, stdItemCount, spcItemCount = DataTables.ComputeRowCountInPChar(u4[itemsTxtDataPtr], 16, 16) - 3,
             DataTables.ComputeRowCountInPChar(u4[stdItemsTxtDataPtr], 1, 1) - 4, DataTables.ComputeRowCountInPChar(d.eax, 1, 2) - 11
+        local useItemsCount = DataTables.ComputeRowCountInPChar(u4[useItemsTxtDataPtr], 0, 2) - 9
         debug.Message(format("items %d, std %d, spc %d", itemCount, stdItemCount, spcItemCount))
 
-        local newSpace = mem.StaticAlloc(itemCount * Game.ItemsTxt.ItemSize + stdItemCount * Game.StdItemsTxt.ItemSize)
+        local itemsSize, stdItemsSize, spcItemsSize, potionTxtSize = itemCount * Game.ItemsTxt.ItemSize, stdItemCount * Game.StdItemsTxt.ItemSize, spcItemCount * Game.SpcItemsTxt.ItemSize, useItemsCount * useItemsCount
+        local newSpace = mem.StaticAlloc(itemsSize + stdItemsSize + spcItemsSize + potionTxtSize + 0x3A38)
+        local itemsOffset = newSpace + 4
+        local stdItemsOffset = itemsOffset + itemsSize
+        local spcItemsOffset = stdItemsOffset + stdItemsSize
+        local potionTxtOffset = spcItemsOffset + spcItemsSize + 0x3918
+
+        local breakpoints = {}
+        do
+            local gameArrays = {4, {Game.ItemsTxt, itemsSize}, {Game.StdItemsTxt, stdItemsSize}, {Game.SpcItemsTxt, spcItemsSize}, 0x3918, {Game.PotionTxt, potionTxtSize}}
+            local offset = 0
+            for i, data in ipairs(gameArrays) do
+                if type(data) == "number" then
+                    offset = offset + data
+                else
+                    local shift = data[2] - data[1].Size
+                    breakpoints[offset] = shift
+                    offset = offset + data[1].Size
+                end
+            end
+            debug.Message(breakpoints)
+        end
+
+        processReferencesTable("ItemsTxt", itemsOffset, itemCount, itemsTxtRefs)
+        processReferencesTable("StdItemsTxt", stdItemsOffset, stdItemCount, stdItemsTxtRefs)
+        processReferencesTable("SpcItemsTxt", spcItemsOffset, spcItemCount, spcItemsTxtRefs)
+        processReferencesTable("PotionTxt", potionTxtOffset, useItemsCount, potionTxtRefs)
+
+        local maxOldOff, maxNewOff = 0
+        for offset, shift in pairs(breakpoints) do
+            maxOldOff = max(maxOldOff, offset)
+            maxNewOff = maxNewOff + shift
+        end
+        maxNewOff = maxNewOff + maxOldOff
+
+        local function check(old, new)
+            assert(old >= 0 and old <= maxOldOff, format("Old item data offset 0x%X is outside bounds [0, 0x%X]", old, maxOldOff))
+            assert(new >= 0 and old <= maxNewOff, format("New item data offset 0x%X is outside bounds [0, 0x%X]", new, maxNewOff))
+        end
+
+        local function getShift(old)
+            local val = old
+            for offset, shift in pairs(breakpoints) do
+                if old >= offset then
+                    val = val + shift
+                end
+            end
+            return val
+        end
+
+        -- ebx points at start of data (items.txt size field)
+        d.ebx = newSpace
+
+        -- check table loading code
+        -- size, limit, count, end? refs
     end)
 end
