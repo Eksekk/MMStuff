@@ -163,7 +163,7 @@ local function processReferencesTable(arrName, newAddress, newCount, addressTabl
     local origin = arr["?ptr"]
     local lowerBoundIncrease = (addressTable.lowerBoundIncrease or 0) * arr.ItemSize
     addressTable.lowerBoundIncrease = nil -- eliminate special case in loop below
-    local oldMin, oldMax = origin - arr.ItemSize - lowerBoundIncrease, origin + arr.Size + arr.ItemSize
+    local oldMin, oldMax = origin - arr.ItemSize - lowerBoundIncrease, origin + (arr.Limit + 1) * arr.ItemSize
     local newMin, newMax = newAddress - arr.ItemSize - lowerBoundIncrease, newAddress + arr.ItemSize * (newCount + 1)
     local function check(old, new, cmdSize, i)
         assert(old >= oldMin and old <= oldMax, format("[%s] old address 0x%X [cmdSize %d; array index %d] is outside array bounds [0x%X, 0x%X] (new entry count: %d)", arrName, old, cmdSize, i, oldMin, oldMax, newCount))
@@ -257,7 +257,7 @@ do
             [6] = {0x449ECB, arr = u1}
         },
         limit = {
-            [1] = {0x00425734, 0x425786, 0x004259ED, 0x00425A3F}
+            [1] = {0x425734, 0x425786, 0x4259ED, 0x425A3F}
         }
     }
 
@@ -268,19 +268,18 @@ do
 
     local itemsTxtRefs = {
         [1] = {
-            0x4218DB, 0x42AB01, 0x43E050, 0x44A09A, 0x450D39, 0x4528BD, 0x452970, 0x4532B2, 0x453800, 0x454290, 0x454B62, 0x456192, 0x4564F2, 0x45664C, 0x457C66, 0x458A2D, 0x458B53, 0x4857C2, 0x49FCDD, 0x49FEDD
+            0x4218DB, 0x42AB01, 0x43E050, 0x44A09A, 0x450D39, 0x4528BD, 0x452970, 0x4532B2, 0x453800, 0x454290, 0x454B62, 0x456192, 0x4564F2, 0x45664C,
+            -- 0x457C66, -- this one is skipped, because it's used before new space is allocated
+            0x458A2D, 0x458B53, 0x4857C2, 0x49FCDD, 0x49FEDD
         },
         [2] = {
             0x4123DC, 0x41271D, 0x41289C, 0x4128A5, 0x4129CA, 0x412A43, 0x412A4C, 0x412B14, 0x412B1D, 0x412C20, 0x412CA1, 0x4207D0, 0x4207FC, 0x427BAC, 0x427BDD, 0x42AAF5, 0x42C706, 0x44868D, 0x448696, 0x4486B8, 0x44A089, 0x45A063, 0x45A06D, 0x47D697, 0x47D6EA, 0x47E462, 0x47E468, 0x47E47E, 0x47E4A8, 0x47E578, 0x47E589, 0x47E58F, 0x47E5C2, 0x47EB11, 0x47EB17, 0x47EB36, 0x480CB9, 0x480CBF, 0x481C60, 0x481C72, 0x482EEC, 0x482F00, 0x482F06, 0x4833A6, 0x4833B0, 0x4833EC, 0x4833FB, 0x483439, 0x483445, 0x48344B, 0x483453, 0x48349F, 0x4834AF, 0x4834B5, 0x4834F7, 0x4834FF, 0x483514, 0x48351D, 0x483529, 0x48352F, 0x48353A, 0x483578, 0x483588, 0x48358E, 0x48359A, 0x48362A, 0x483630, 0x48366E, 0x483674, 0x48367F, 0x483A2A, 0x483A34, 0x483B11, 0x483B1B, 0x483B87, 0x483B91, 0x48513F, 0x485164, 0x485826, 0x48588F, 0x4858F8, 0x485961, 0x4859B8, 0x485A0F, 0x485A66, 0x485ABD, 0x485B14, 0x485B6B, 0x485BC2, 0x4A4C42, 0x4A4C85
         },
         [3] = {
-            0x40FEE0, 0x40FF00, 0x410FF2, 0x4123E2, 0x4123E9, 0x412497, 0x41249E, 0x412657, 0x41265E, 0x412708, 0x41270F, 0x41292F, 0x412936, 0x4129BC, 0x4129C3, 0x412C30, 0x412C37, 0x412E58, 0x412F10, 0x412FAA, 0x4166A0, 0x41C4F2, 0x41C4FA, 0x41C57D, 0x41CB34, 0x41DECB, 0x41E0D6, 0x41E288, 0x41EB7A, 0x41ECF9, 0x41F11F, 0x41FE88, 0x420569, 0x4205B0, 0x4206A8, 0x421700, 0x4217E5, 0x4218EE, 0x42558B, 0x425592, 0x4256AB, 0x4256C5, 0x4256EC, 0x425763, 0x4257BE, 0x425801, 0x42584F, 0x425964, 0x42597E, 0x4259A5, 0x425A1C, 0x425A77, 0x425ABA, 0x425B08, 0x425C07, 0x425C21, 0x425C48, 0x429FAB, 0x42A396, 0x431CA0, 0x44861A, 0x448670, 0x44870B, 0x448B46, 0x448BD2, 0x44F0D6, 0x458F91, 0x45907B, 0x45997F, 0x45A040, 0x45A967, 0x45BB89, 0x45BD12, 0x47E501, 0x47E625, 0x480BEF, 0x480C60, 0x481AF4, 0x481AFB, 0x481B4A, 0x481B51, 0x481B9C, 0x481BC0, 0x481BFB, 0x4835E5, 0x483C16, 0x483C98, 0x486CFF, 0x486E43, 0x486F37, 0x4870E4, 0x4872B2, 0x496E9E, 0x49758B, 0x4A4434, 0x4A46E6, 0x4A47F6, 0x4A499A
+            0x40FEE0, 0x40FF00, 0x410FF2, 0x4123E2, 0x4123E9, 0x412497, 0x41249E, 0x412657, 0x41265E, 0x412708, 0x41270F, 0x41292F, 0x412936, 0x4129BC, 0x4129C3, 0x412C30, 0x412C37, 0x412E58, 0x412F10, 0x412FAA, 0x4166A0, 0x41C4F2, 0x41C4FA, 0x41C57D, 0x41DECB, 0x41E0D6, 0x41E288, 0x41EB7A, 0x41ECF9, 0x41F11F, 0x41FE88, 0x420569, 0x4205B0, 0x4206A8, 0x421700, 0x4217E5, 0x4218EE, 0x42558B, 0x425592, 0x4256AB, 0x4256C5, 0x4256EC, 0x425763, 0x4257BE, 0x425801, 0x42584F, 0x425964, 0x42597E, 0x4259A5, 0x425A1C, 0x425A77, 0x425ABA, 0x425B08, 0x425C07, 0x425C21, 0x425C48, 0x429FAB, 0x42A396, 0x431CA0, 0x44861A, 0x448670, 0x448B46, 0x448BD2, 0x44F0D6, 0x458F91, 0x45907B, 0x45997F, 0x45A040, 0x45A967, 0x45BB89, 0x45BD12, 0x47E501, 0x47E625, 0x480BEF, 0x480C60, 0x481AF4, 0x481AFB, 0x481B4A, 0x481B51, 0x481B9C, 0x481BC0, 0x481BFB, 0x4835E5, 0x483C16, 0x483C98, 0x486CFF, 0x486E43, 0x486F37, 0x4870E4, 0x4872B2, 0x496E9E, 0x49758B, 0x4A4434, 0x4A46E6, 0x4A47F6, 0x4A499A
         },
         [5] = {
             0x41FFA4, 0x4208E1, 0x44C2F0, 0x45609A, 0x4561B0, 0x45625A, 0x46CC95, 0x48B2F3
-        },
-        verify = {
-            0x4256F7, 0x425987, 0x4259B0, 0x425C2A, 0x425C53
         },
         limit = {
             [1] = {0x449852, 0x40FEC3, 0x448968, 0x448CDA},
@@ -288,17 +287,9 @@ do
         }
     }
 
-    -- rnditems.txt is ChanceByLevel field of ItemsTxtItem
+    -- potion txt: 0x56A77F, 0x56AAC9, 0x9B6F, 0x9EB9
 
-    -- absolute
-    local itemDataOffsetRefs = {
-        [1] = {0x4218DB, 0x43E050, 0x450D39, 0x4528BD, 0x452970, 0x4532B2, 0x453800, 0x454290, 0x454B62, 0x456192, 0x4564F2, 0x45664C,
-            -- 0x457C66, -- this one is skipped, because it's used before new space is allocated
-            0x458A2D, 0x458B53, 0x4857C2, 0x49FCDD, 0x49FEDD
-        },
-        [2] = {0x42AAF5, 0x44A61B, 0x44A630, 0x44A645, 0x44A65A, 0x44A66F, 0x44A683, 0x44A692, 0x44A69E},
-        [3] = {0x448C3B, 0x00448C4F}
-    }
+    -- rnditems.txt is ChanceByLevel field of ItemsTxtItem
 
 	--[[
 		REMOVE LIMITS WORKFLOW:
@@ -311,8 +302,8 @@ do
     -- various enchantment power ranges etc. and relative offsets from item data start
 	local otherItemDataRefs = {
         [1] = {0x425716, 0x425734, 0x425786, 0x4259ED, 0x425A3F},
-        [2] = {0x425710, 0x425716, 0x4259C9, 0x4259CF, 0x425C6C, 0x425C72, 0x448F95, 0x4496C8, 0x449835, {arr = u1, 0x449846}, 0x44991E, 0x449932, 0x449946, 0x44996B, 0x44997F, 0x449993, 0x4499B8, 0x4499CC, 0x4499E0, 0x449A05, 0x449A19, 0x449A2D, 0x449A4B, 0x449A5C, 0x449A6D, 0x449A8B, 0x449A9C, 0x449AAD, 0x449AFF, 0x449B31, 0x449C32, 0x449C3C, 0x4465DE, 0x449D43, 0x449D75, 0x449EC1, 0x449ECB, 0x449ED5, 0x449EDD, 0x449EF4},
-        [3] = {0x4256B5, 0x42596E, 0x425C11},
+        [2] = {0x425710, 0x425716, 0x4259C9, 0x4259CF, 0x425C6C, 0x425C72, 0x448F95, 0x4496C8, 0x449835, {arr = u1, 0x449846}, 0x44991E, 0x449932, 0x449946, 0x44996B, 0x44997F, 0x449993, 0x4499B8, 0x4499CC, 0x4499E0, 0x449A05, 0x449A19, 0x449A2D, 0x449A4B, 0x449A5C, 0x449A6D, 0x449A8B, 0x449A9C, 0x449AAD, 0x449AFF, 0x449B31, 0x449C32, 0x449C3C, 0x4465DE, 0x449D43, 0x449D75, 0x449EC1, 0x449ECB, 0x449ED5, 0x449EDD, 0x449EF4, 0x44A61B, 0x44A630, 0x44A645, 0x44A65A, 0x44A66F, 0x44A683, 0x44A692, 0x44A69E},
+        [3] = {0x4256B5, 0x42596E, 0x425C11, 0x448C3B, 0x448C4F},
     }
 
     -- 0x6BA998 is scroll.txt contents
@@ -339,12 +330,11 @@ do
     local NOP = string.char(0x90)
 
     local dataPtrs = 0x56AACC -- data pointers
-    local itemsTxtDataPtr, rndItemsDataPtr, stdItemsTxtDataPtr, spcItemsTxtDataPtr, useItemsTxtDataPtr = dataPtrs, dataPtrs + 4, dataPtrs + 8, dataPtrs + 12, 0x56F470
-    local hooks = HookManager{itemsTxtDataPtr = itemsTxtDataPtr, stdItemsTxtDataPtr = stdItemsTxtDataPtr, spcItemsTxtDataPtr = spcItemsTxtDataPtr, useItemsTxtDataPtr = useItemsTxtDataPtr, itemsTxtFileName = 0x4BFE04, stdItemsTxtFileName = 0x4BFCD8, spcItemsTxtFileName = 0x4BFCC8, iconsLod = Game.IconsLod["?ptr"], loadFileFromLod = 0x40C1A0, useItemsTxtFileName = 0x4BF9BC, rndItemsTxtFileName = 0x4BFCE8}
-    do return end
+    local itemsTxtDataPtr, rndItemsTxtDataPtr, stdItemsTxtDataPtr, spcItemsTxtDataPtr, useItemsTxtDataPtr = dataPtrs, dataPtrs + 4, dataPtrs + 8, dataPtrs + 12, 0x56F470
+    local hooks = HookManager{itemsTxtDataPtr = itemsTxtDataPtr, rndItemsTxtDataPtr = rndItemsTxtDataPtr, stdItemsTxtDataPtr = stdItemsTxtDataPtr, spcItemsTxtDataPtr = spcItemsTxtDataPtr, useItemsTxtDataPtr = useItemsTxtDataPtr, itemsTxtFileName = 0x4BFE04, stdItemsTxtFileName = 0x4BFCD8, spcItemsTxtFileName = 0x4BFCC8, iconsLod = Game.IconsLod["?ptr"], loadFileFromLod = 0x40C1A0, useItemsTxtFileName = 0x4BF9BC, rndItemsTxtFileName = 0x4BFCE8}
 
     -- load tables
-    local addr = hooks.asmpatch(0x448654D, [[
+    local addr = hooks.asmpatch(0x44654D, [[
         ; items.txt
         mov ecx, %iconsLod%
         push 0
@@ -388,10 +378,10 @@ do
     ]], 0x16)
 
     hook(mem.findcode(addr, NOP), function(d)
-        local itemCount, stdItemCount, spcItemCount = DataTables.ComputeRowCountInPChar(u4[itemsTxtDataPtr], 16, 16) - 3,
+        local itemCount, stdItemCount, spcItemCount = DataTables.ComputeRowCountInPChar(u4[itemsTxtDataPtr], 0, 1) - 3,
             DataTables.ComputeRowCountInPChar(u4[stdItemsTxtDataPtr], 1, 1) - 4, DataTables.ComputeRowCountInPChar(d.eax, 1, 2) - 11
         local potionTxtCount = DataTables.ComputeRowCountInPChar(u4[useItemsTxtDataPtr], 0, 2) - 9 -- the file for this is useItems.txt
-        debug.Message(format("items %d, std %d, spc %d, potion %d", itemCount, stdItemCount, spcItemCount))
+        --debug.Message(format("items %d, std %d, spc %d, potion %d", itemCount, stdItemCount, spcItemCount, potionTxtCount))
 
         local origItemDataOffset = Game.ItemsTxt["?ptr"] - 4 -- -4 for size field
 
@@ -405,7 +395,7 @@ do
         processReferencesTable("ItemsTxt", itemsOffset, itemCount, itemsTxtRefs)
         processReferencesTable("StdItemsTxt", stdItemsOffset, stdItemCount, stdItemsTxtRefs)
         processReferencesTable("SpcItemsTxt", spcItemsOffset, spcItemCount, spcItemsTxtRefs)
-        processReferencesTable("PotionTxt", potionTxtOffset, potionTxtCount, potionTxtRefs)
+        --processReferencesTable("PotionTxt", potionTxtOffset, potionTxtCount, potionTxtRefs)
 
         -- move data pointers
         -- for i, v in ipairs{itemsTxtDataPtr, rndItemsDataPtr, stdItemsTxtDataPtr, spcItemsTxtDataPtr} do
@@ -421,24 +411,25 @@ do
                 if type(data) == "number" then
                     offset = offset + data
                 else
-                    local shift = data[2] - data[1].Size
+                    local size = data[1].Limit * data[1].ItemSize
+                    local shift = data[2] - size
                     breakpoints[offset] = shift
-                    offset = offset + data[1].Size
+                    offset = offset + size
                 end
             end
-            debug.Message(breakpoints)
+            --debug.Message(dump(breakpoints))
         end
 
-        local maxOldOff, maxNewOff = 0
+        local maxOldOff, maxNewOff = 0, 0
         for offset, shift in pairs(breakpoints) do
             maxOldOff = max(maxOldOff, offset)
             maxNewOff = maxNewOff + shift
         end
         maxNewOff = maxNewOff + maxOldOff
 
-        local function check(old, new)
-            assert(old >= 0 and old <= maxOldOff, format("Old item data offset 0x%X is outside bounds [0, 0x%X]", old, maxOldOff))
-            assert(new >= 0 and old <= maxNewOff, format("New item data offset 0x%X is outside bounds [0, 0x%X]", new, maxNewOff))
+        local function check(old, new, cmdSize, i)
+            assert(old >= 0 and old <= maxOldOff, format("Old item data offset 0x%X (cmdSize %d, index %d) is outside bounds [0, 0x%X]", old, cmdSize, i, maxOldOff))
+            assert(new >= 0 and new <= maxNewOff, format("New item data offset 0x%X (cmdSize %d, index %d) is outside bounds [0, 0x%X]", new, cmdSize, i, maxNewOff))
         end
 
         local function getNewDataOffset(old)
@@ -451,7 +442,7 @@ do
             return val
         end
 
-        for cmdSize, addresses in pairs(itemDataOffsetRefs) do
+        for cmdSize, addresses in pairs(otherItemDataRefs) do
             replacePtrs{addrTable = addresses, cmdSize = cmdSize, func = getNewDataOffset, check = check}
         end
 
@@ -562,17 +553,17 @@ do
             events.cocall("ArtifactGenerated", t)
         end)
 
-        -- TODO: generateArtifact (0x0044A6B0)
+        -- TODO: generateArtifact (0x44A6B0)
 
-        -- 0x00440D43, 0x00441891 contains check for artifact added to mouse and if it's artifact, marks as found
+        -- 0x440D43, 0x441891 contains check for artifact added to mouse and if it's artifact, marks as found
         
         -- MOVE TABLE DATA POINTERS
 
         -- size: std done, spc done, items done, potion done, scroll done
         -- limit: 
         ------ hardcoded: scroll done, potion done, spc done, std done (?), items done (absolute limit), possible to generate (0x190) done and artifacts and below (.429) TODO-ed)
-        ------ address of variable: 
-        -- count:
+        ------ address of variable: items done?
+        -- count: 
         -- end: 
         -- GAME EXIT CLEANUP FUNCTION
     end)
