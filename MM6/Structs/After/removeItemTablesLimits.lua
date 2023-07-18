@@ -3,7 +3,43 @@ local hook, autohook, autohook2, asmpatch = mem.hook, mem.autohook, mem.autohook
 local max, min, floor, ceil, round, random = math.max, math.min, math.floor, math.ceil, math.round, math.random
 local format = string.format
 
-if offsets.MMVersion ~= 6 then return end
+local mmver = offsets.MMVersion
+function mmv(...)
+	local r = select(mmver - 5, ...)
+	assert(r ~= nil)
+	return r
+end
+
+if mmver ~= 6 then return end
+
+local function getSpellQueueData(spellQueuePtr, targetPtr)
+	local t = {Spell = i2[spellQueuePtr], Caster = Party.PlayersArray[i2[spellQueuePtr + 2]]}
+	t.SpellSchool = ceil(t.Spell / 11)
+	local flags = u2[spellQueuePtr + 8]
+	if flags:And(0x10) ~= 0 then -- caster is target
+		t.Caster = Party.PlayersArray[i2[spellQueuePtr + 4]]
+	end
+
+	if flags:And(1) ~= 0 then
+		t.FromScroll = true
+		t.Skill, t.Mastery = SplitSkill(u2[spellQueuePtr + 0xA])
+	else
+		t.Skill, t.Mastery = SplitSkill(t.Caster:GetSkill(const.Skills.Fire + t.SpellSchool - 1))
+	end
+
+	local targetIdKey = mmv("TargetIndex", "TargetIndex", "TargetRosterId")
+	if targetPtr then
+		if type(targetPtr) == "number" then
+			t[targetIdKey], t.Target = internal.GetPlayer(targetPtr)
+		else
+			t[targetIdKey], t.Target = targetPtr:GetIndex(), targetPtr
+		end
+	else
+		local pl = Party[i2[spellQueuePtr + 4]]
+		t[targetIdKey], t.Target = pl:GetIndex(), pl
+	end
+	return t
+end
 
 function arrayFieldOffsetName(arr, offset)
     if offset >= arr["?ptr"] then
@@ -254,6 +290,7 @@ do
 
     -- rnditems.txt is ChanceByLevel field of ItemsTxtItem
 
+    -- absolute
     local itemDataOffsetRefs = {
         [1] = {0x4218DB, 0x43E050, 0x450D39, 0x4528BD, 0x452970, 0x4532B2, 0x453800, 0x454290, 0x454B62, 0x456192, 0x4564F2, 0x45664C,
             -- 0x457C66, -- this one is skipped, because it's used before new space is allocated
@@ -356,12 +393,24 @@ do
         local potionTxtCount = DataTables.ComputeRowCountInPChar(u4[useItemsTxtDataPtr], 0, 2) - 9 -- the file for this is useItems.txt
         debug.Message(format("items %d, std %d, spc %d, potion %d", itemCount, stdItemCount, spcItemCount))
 
+        local origItemDataOffset = Game.ItemsTxt["?ptr"] - 4 -- -4 for size field
+
         local itemsSize, stdItemsSize, spcItemsSize, potionTxtSize = itemCount * Game.ItemsTxt.ItemSize, stdItemCount * Game.StdItemsTxt.ItemSize, spcItemCount * Game.SpcItemsTxt.ItemSize, potionTxtCount * potionTxtCount
         local newSpace = mem.StaticAlloc(itemsSize + stdItemsSize + spcItemsSize + potionTxtSize + 0x3A40)
         local itemsOffset = newSpace + 4
         local stdItemsOffset = itemsOffset + itemsSize
         local spcItemsOffset = stdItemsOffset + stdItemsSize
         local potionTxtOffset = spcItemsOffset + spcItemsSize + 0x3918
+
+        processReferencesTable("ItemsTxt", itemsOffset, itemCount, itemsTxtRefs)
+        processReferencesTable("StdItemsTxt", stdItemsOffset, stdItemCount, stdItemsTxtRefs)
+        processReferencesTable("SpcItemsTxt", spcItemsOffset, spcItemCount, spcItemsTxtRefs)
+        processReferencesTable("PotionTxt", potionTxtOffset, potionTxtCount, potionTxtRefs)
+
+        -- move data pointers
+        -- for i, v in ipairs{itemsTxtDataPtr, rndItemsDataPtr, stdItemsTxtDataPtr, spcItemsTxtDataPtr} do
+        --     u4[v - origItemDataOffset] = u4[v]
+        -- end
 
         -- keys are values after which value needs to be added to data offset (requires summing all of those that are passed)
         local breakpoints = {}
@@ -379,11 +428,6 @@ do
             end
             debug.Message(breakpoints)
         end
-
-        processReferencesTable("ItemsTxt", itemsOffset, itemCount, itemsTxtRefs)
-        processReferencesTable("StdItemsTxt", stdItemsOffset, stdItemCount, stdItemsTxtRefs)
-        processReferencesTable("SpcItemsTxt", spcItemsOffset, spcItemCount, spcItemsTxtRefs)
-        processReferencesTable("PotionTxt", potionTxtOffset, potionTxtCount, potionTxtRefs)
 
         local maxOldOff, maxNewOff = 0
         for offset, shift in pairs(breakpoints) do
@@ -437,16 +481,103 @@ do
         asmpatch(0x448CFB, "mov edx, " .. itemBuf)
         asmpatch(0x448E25, "mov eax, [" .. itemBuf .. "]")
         asmpatch(0x448E60, "mov eax, " .. itemBuf)
+        -- TODO: CHECK
+
+        -- golden touch
+        autohook2(0x428722, function(d)
+            local t = getSpellQueueData(d.ebx, d.edi)
+            t.Item = structs.Item:new(d.esi)
+            t.Can = d.SF ~= d.OF -- doesn't include all checks, just the one for item number
+            -- set nil to allow vanilla code to decide
+            -- vanilla checks:
+            -- item id < 400
+            -- item not broken
+            -- chance check (10% * skill) passed
+            events.cocall("CanItemBeAffectedBySpell", t)
+            if t.Can ~= nil then
+                if t.Can then
+                    d:push(0x428758)
+                    return true
+                else
+                    d:push(0x425CE9)
+                    return true
+                end
+            end
+        end, 0xC)
 
         -- 0x448A1F, 0x4497F9, 0x44A70A CONTAIN HIGH OF ITEMS ABLE TO BE GENERATED EXCEPT ARTIFACTS (0x190, 400)
         -- 0x44A6E1 contains last artifact index
 
+        -- can item be generated
+        do
+            local buf = mem.StaticAlloc(itemCount)
+            mem.fill(buf, 400, 1) -- normal items
+            mem.fill(buf + 400, itemCount - 400, 0) -- artifacts and quest items and after
+            local can = setmetatable({}, {__index = function(_, i)
+                if i > itemCount then
+                    error(format("Invalid item id %d", i), 2)
+                end
+                return u1[buf + i - 1] ~= 0
+            end,
+            __newindex = function(_, i, v)
+                if i > itemCount then
+                    error(format("Invalid item id %d", i), 2)
+                end
+                u1[buf + i - 1] = v and 1 or 0
+            end})
+            -- if value at index idx is 0, item idx cannot be generated (artifacts and quest items by default), otherwise it can
+            evt.CanItemBeRandomlyFound = can
+            HookManager{
+                buf = buf, itemCount = itemCount
+            }.asmpatch(0x448A1F, [[
+                ; edi = item id
+                mov al, [%buf% + edi - 1]
+                test al, al
+                jne absolute 0x4489A2
+                ; current cannot be generated - find first which can
+                push esi
+                xchg esi, edi
+                lea edi, [%buf% + esi]
+                lea ecx, [%itemCount% - esi]
+                or al, 1
+                repne scasb
+                xchg esi, edi
+                pop esi
+                jne @exit
+                sub edi, %buf% - 1
+                jmp absolute 0x4489A2
+                @exit:
+            ]], 0xC)
+        end
+
+        asmpatch(0x4497F9, "cmp edi," .. itemCount)
+
+        mem.hookfunction(0x44A6B0, 1, 0, function(d, def, itemPtr)
+            local item = structs.Item:new(itemPtr)
+            local t = {Item = item, Allow = true}
+            events.cocall("GenerateArtifact", t)
+            if t.Allow then
+                def(itemPtr)
+            end
+            events.cocall("ArtifactGenerated", t)
+        end)
+
+        -- TODO: generateArtifact (0x0044A6B0)
+
+        -- 0x00440D43, 0x00441891 contains check for artifact added to mouse and if it's artifact, marks as found
+        
+        -- MOVE TABLE DATA POINTERS
+
         -- size: std done, spc done, items done, potion done, scroll done
         -- limit: 
-        ------ hardcoded: scroll done, potion done, spc done, std done (?), items done (absolute limit, remaining: possible to generate (0x190) and artifacts and below (.429))
-        ------ address of variable:
+        ------ hardcoded: scroll done, potion done, spc done, std done (?), items done (absolute limit), possible to generate (0x190) done and artifacts and below (.429) TODO-ed)
+        ------ address of variable: 
         -- count:
         -- end: 
         -- GAME EXIT CLEANUP FUNCTION
     end)
+end
+
+function events.CanItemBeAffectedBySpell(t)
+    -- TODO
 end
