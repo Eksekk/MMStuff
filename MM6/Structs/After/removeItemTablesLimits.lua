@@ -146,6 +146,11 @@ function replacePtrs(t) -- addrTable, newAddr, origin, cmdSize, check)
     local func = t.func
     local arr = t.arr or u4
 	for i, oldAddr in ipairs(t.addrTable) do
+        local arr, oldAddr = arr, oldAddr
+        if type(oldAddr) == "table" then
+            arr = oldAddr.arr
+            oldAddr = oldAddr[1]
+        end
 		local old = arr[oldAddr + t.cmdSize]
         local new
         if func then
@@ -158,7 +163,7 @@ function replacePtrs(t) -- addrTable, newAddr, origin, cmdSize, check)
 	end
 end
 
-local function processReferencesTable(arrName, newAddress, newCount, addressTable)
+local function processReferencesTable(arrName, newAddress, newCount, addressTable, lenP)
     local arr = Game[arrName]
     local origin = arr["?ptr"]
     local lowerBoundIncrease = (addressTable.lowerBoundIncrease or 0) * arr.ItemSize
@@ -203,7 +208,7 @@ local function processReferencesTable(arrName, newAddress, newCount, addressTabl
             end
         end
     end
-    mem.ChangeGameArray(arrName, newAddress, newCount)
+    mem.ChangeGameArray(arrName, newAddress, newCount, lenP)
     mem.prot()
 end
 
@@ -257,7 +262,8 @@ do
             [6] = {0x449ECB, arr = u1}
         },
         limit = {
-            [1] = {0x425734, 0x425786, 0x4259ED, 0x425A3F}
+            [1] = {0x425734, 0x425786, 0x4259ED, 0x425A3F},
+            [4] = {0x449D7F}
         }
     }
 
@@ -283,7 +289,7 @@ do
         },
         limit = {
             [1] = {0x449852, 0x40FEC3, 0x448968, 0x448CDA},
-            [2] = {0x44966C, 0x449678, 0x449805, 0x44A6F4}
+            [2] = {0x44966C, 0x449678--[[, 0x449805]], 0x44A6F4}
         }
     }
 
@@ -299,11 +305,17 @@ do
 		4) test and fix all bugs you can find
 	]]
 	
-    -- various enchantment power ranges etc. and relative offsets from item data start
+    -- various enchantment power ranges etc.
 	local otherItemDataRefs = {
-        [1] = {0x425716, 0x425734, 0x425786, 0x4259ED, 0x425A3F},
-        [2] = {0x425710, 0x425716, 0x4259C9, 0x4259CF, 0x425C6C, 0x425C72, 0x448F95, 0x4496C8, 0x449835, {arr = u1, 0x449846}, 0x44991E, 0x449932, 0x449946, 0x44996B, 0x44997F, 0x449993, 0x4499B8, 0x4499CC, 0x4499E0, 0x449A05, 0x449A19, 0x449A2D, 0x449A4B, 0x449A5C, 0x449A6D, 0x449A8B, 0x449A9C, 0x449AAD, 0x449AFF, 0x449B31, 0x449C32, 0x449C3C, 0x4465DE, 0x449D43, 0x449D75, 0x449EC1, 0x449ECB, 0x449ED5, 0x449EDD, 0x449EF4, 0x44A61B, 0x44A630, 0x44A645, 0x44A65A, 0x44A66F, 0x44A683, 0x44A692, 0x44A69E},
-        [3] = {0x4256B5, 0x42596E, 0x425C11, 0x448C3B, 0x448C4F},
+        [1] = {0x425734, 0x425786, 0x4259ED, 0x425A3F},
+        [2] = {0x425710, 0x425716, 0x4259C9, 0x4259CF, 0x425C6C, 0x425C72},
+        [3] = {0x4256B5, 0x42596E, 0x425C11},
+    }
+
+    -- relative offsets from item data start
+    local relativeItemDataRefs = {
+        [2] = {0x448F95, 0x4496C8, 0x449835, 0x44991E, 0x449932, 0x449946, 0x44996B, 0x44997F, 0x449993, 0x4499B8, 0x4499CC, 0x4499E0, 0x449A05, 0x449A19, 0x449A2D, 0x449A4B, 0x449A5C, 0x449A6D, 0x449A8B, 0x449A9C, 0x449AAD, 0x449AFF, 0x449B31, 0x449C32, 0x449C3C, 0x4465DE, 0x449D43, 0x449D75, 0x449EC1, 0x449ECB, 0x449ED5, 0x449EDD, 0x449EF4, 0x44A61B, 0x44A630, 0x44A645, 0x44A65A, 0x44A66F, 0x44A683, 0x44A692, 0x44A69E},
+        [3] = {0x448C3B, 0x448C4F}
     }
 
     -- 0x6BA998 is scroll.txt contents
@@ -349,13 +361,6 @@ do
         call absolute %loadFileFromLod%
         mov [%rndItemsTxtDataPtr%], eax
 
-        ; useitems.txt
-        mov ecx, %iconsLod%
-        push 0
-        push %useItemsTxtFileName%
-        call absolute %loadFileFromLod%
-        mov [%useItemsTxtDataPtr%], eax
-
         ; stditems.txt
         mov ecx, %iconsLod%
         push 0
@@ -370,42 +375,42 @@ do
         call absolute %loadFileFromLod%
         mov [%spcItemsTxtDataPtr%], eax
 
+        ; useitems.txt
+        mov ecx, %iconsLod%
+        push 0
+        push %useItemsTxtFileName%
+        call absolute %loadFileFromLod%
+        mov [%useItemsTxtDataPtr%], eax
+
         nop
         nop
         nop
         nop
         nop
-    ]], 0x16)
+    ]], 0x1B)
 
     hook(mem.findcode(addr, NOP), function(d)
         local itemCount, stdItemCount, spcItemCount = DataTables.ComputeRowCountInPChar(u4[itemsTxtDataPtr], 0, 1) - 3,
-            DataTables.ComputeRowCountInPChar(u4[stdItemsTxtDataPtr], 1, 1) - 4, DataTables.ComputeRowCountInPChar(d.eax, 1, 2) - 11
+            DataTables.ComputeRowCountInPChar(u4[stdItemsTxtDataPtr], 1, 1) - 4, DataTables.ComputeRowCountInPChar(u4[spcItemsTxtDataPtr], 1, 2) - 11
         local potionTxtCount = DataTables.ComputeRowCountInPChar(u4[useItemsTxtDataPtr], 0, 2) - 9 -- the file for this is useItems.txt
-        --debug.Message(format("items %d, std %d, spc %d, potion %d", itemCount, stdItemCount, spcItemCount, potionTxtCount))
+        debug.Message(format("items %d, std %d, spc %d, potion %d", itemCount, stdItemCount, spcItemCount, potionTxtCount))
 
         local origItemDataOffset = Game.ItemsTxt["?ptr"] - 4 -- -4 for size field
 
         local itemsSize, stdItemsSize, spcItemsSize, potionTxtSize = itemCount * Game.ItemsTxt.ItemSize, stdItemCount * Game.StdItemsTxt.ItemSize, spcItemCount * Game.SpcItemsTxt.ItemSize, potionTxtCount * potionTxtCount
         local newSpace = mem.StaticAlloc(itemsSize + stdItemsSize + spcItemsSize + potionTxtSize + 0x3A40)
+        u4[newSpace] = itemCount
         local itemsOffset = newSpace + 4
         local stdItemsOffset = itemsOffset + itemsSize
         local spcItemsOffset = stdItemsOffset + stdItemsSize
         local potionTxtOffset = spcItemsOffset + spcItemsSize + 0x3918
-
-        processReferencesTable("ItemsTxt", itemsOffset, itemCount, itemsTxtRefs)
-        processReferencesTable("StdItemsTxt", stdItemsOffset, stdItemCount, stdItemsTxtRefs)
-        processReferencesTable("SpcItemsTxt", spcItemsOffset, spcItemCount, spcItemsTxtRefs)
-        --processReferencesTable("PotionTxt", potionTxtOffset, potionTxtCount, potionTxtRefs)
-
-        -- move data pointers
-        -- for i, v in ipairs{itemsTxtDataPtr, rndItemsDataPtr, stdItemsTxtDataPtr, spcItemsTxtDataPtr} do
-        --     u4[v - origItemDataOffset] = u4[v]
-        -- end
+        local otherDataOffset = potionTxtOffset + potionTxtSize
 
         -- keys are values after which value needs to be added to data offset (requires summing all of those that are passed)
+        -- REQUIRES to be before game arrays are changed
         local breakpoints = {}
         do
-            local gameArrays = {4, {Game.ItemsTxt, itemsSize}, {Game.StdItemsTxt, stdItemsSize}, {Game.SpcItemsTxt, spcItemsSize}, 0x3918, {Game.PotionTxt, potionTxtSize}}
+            local gameArrays = {4, {Game.ItemsTxt, itemsSize}, {Game.StdItemsTxt, stdItemsSize}, {Game.SpcItemsTxt, spcItemsSize}, 0x3918, {Game.PotionTxt, potionTxtSize}, 0x127}
             local offset = 0
             for i, data in ipairs(gameArrays) do
                 if type(data) == "number" then
@@ -417,10 +422,11 @@ do
                     offset = offset + size
                 end
             end
+            breakpoints[offset] = 0
             --debug.Message(dump(breakpoints))
         end
 
-        local maxOldOff, maxNewOff = 0, 0
+        local minOldOff, maxOldOff, minNewOff, maxNewOff = 0, 0, 0, 0
         for offset, shift in pairs(breakpoints) do
             maxOldOff = max(maxOldOff, offset)
             maxNewOff = maxNewOff + shift
@@ -428,8 +434,8 @@ do
         maxNewOff = maxNewOff + maxOldOff
 
         local function check(old, new, cmdSize, i)
-            assert(old >= 0 and old <= maxOldOff, format("Old item data offset 0x%X (cmdSize %d, index %d) is outside bounds [0, 0x%X]", old, cmdSize, i, maxOldOff))
-            assert(new >= 0 and new <= maxNewOff, format("New item data offset 0x%X (cmdSize %d, index %d) is outside bounds [0, 0x%X]", new, cmdSize, i, maxNewOff))
+            assert(old >= minOldOff and old <= maxOldOff, format("Old item data offset 0x%X (cmdSize %d, index %d) is outside bounds [0x%X, 0x%X]", old, cmdSize, i, minOldOff, maxOldOff))
+            assert(new >= minNewOff and new <= maxNewOff, format("New item data offset 0x%X (cmdSize %d, index %d) is outside bounds [0x%X, 0x%X]", new, cmdSize, i, minNewOff, maxNewOff))
         end
 
         local function getNewDataOffset(old)
@@ -442,16 +448,32 @@ do
             return val
         end
 
-        for cmdSize, addresses in pairs(otherItemDataRefs) do
+        for cmdSize, addresses in pairs(relativeItemDataRefs) do
             replacePtrs{addrTable = addresses, cmdSize = cmdSize, func = getNewDataOffset, check = check}
         end
+
+        maxOldOff, maxNewOff = maxOldOff + 0x56AADC, maxNewOff + newSpace
+        minOldOff, minNewOff = minOldOff + 0x56AADC, minNewOff + newSpace
+        for cmdSize, addresses in pairs(otherItemDataRefs) do
+            replacePtrs{addrTable = addresses, cmdSize = cmdSize, origin = 0x56AADC, newAddr = otherDataOffset, check = check}
+        end
+
+        processReferencesTable("ItemsTxt", itemsOffset, itemCount, itemsTxtRefs, newSpace)
+        processReferencesTable("StdItemsTxt", stdItemsOffset, stdItemCount, stdItemsTxtRefs)
+        processReferencesTable("SpcItemsTxt", spcItemsOffset, spcItemCount, spcItemsTxtRefs)
+        --processReferencesTable("PotionTxt", potionTxtOffset, potionTxtCount, potionTxtRefs)
+
+        -- move data pointers
+        -- for i, v in ipairs{itemsTxtDataPtr, rndItemsDataPtr, stdItemsTxtDataPtr, spcItemsTxtDataPtr} do
+        --     u4[v - origItemDataOffset] = u4[v]
+        -- end
 
         -- esi points at start of data (items.txt size field)
         d.esi = newSpace
 
         -- correct base pointer
         hooks.ref.newSpace = newSpace
-        hooks.asmhook(0x448F6B, [[
+        hooks.asmhook(0x448F72, [[
             mov ebx, %newSpace%
             mov [esp + 0x18], ebx
         ]])
@@ -461,6 +483,29 @@ do
         asmpatch(0x4496AC, "mov eax, " .. u4[rndItemsTxtDataPtr], 0x16)
         asmpatch(0x449ADE, "mov eax, " .. u4[stdItemsTxtDataPtr], 0x1B)
         asmpatch(0x449D22, "mov eax, " .. u4[spcItemsTxtDataPtr], 0x1B)
+
+        hooks.ref.lastRndItemsIndex = mem.StaticAlloc(4)
+        -- don't require rnditems.txt to have filled data for all items
+
+        hooks.asmpatch(0x4497F9, [[
+            ; if there is more data, next character is newline and then a digit
+            mov al, [esi + 1]
+            cmp al, '0'
+            jb @done
+            cmp al, '9'
+            ja @done
+            jmp @exit
+            @done:
+                mov [%lastRndItemsIndex%], edi
+                jmp absolute 0x449805
+            @exit:
+                jmp absolute 0x4496F7
+        ]], 0xC)
+
+        -- hooks.asmhook(0x4498B0, [[
+        --     cmp edi, [%lastRndItemsIndex%]
+        --     jg
+        -- ]])
 
         -- generate item function stuff
         local itemBuf = mem.StaticAlloc(itemCount * 4)
@@ -499,7 +544,7 @@ do
         -- 0x448A1F, 0x4497F9, 0x44A70A CONTAIN HIGH OF ITEMS ABLE TO BE GENERATED EXCEPT ARTIFACTS (0x190, 400)
         -- 0x44A6E1 contains last artifact index
 
-        -- can item be generated
+        -- can item be generated, TODO: patch all instance3s
         do
             local buf = mem.StaticAlloc(itemCount)
             mem.fill(buf, 400, 1) -- normal items
@@ -529,7 +574,8 @@ do
                 push esi
                 xchg esi, edi
                 lea edi, [%buf% + esi]
-                lea ecx, [%itemCount% - esi]
+                mov ecx, %itemCount%
+                sub ecx, esi
                 or al, 1
                 repne scasb
                 xchg esi, edi
@@ -541,7 +587,7 @@ do
             ]], 0xC)
         end
 
-        asmpatch(0x4497F9, "cmp edi," .. itemCount)
+        -- asmpatch(0x4497F9, "cmp edi," .. itemCount)
 
         mem.hookfunction(0x44A6B0, 1, 0, function(d, def, itemPtr)
             local item = structs.Item:new(itemPtr)
