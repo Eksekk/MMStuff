@@ -389,17 +389,20 @@ do
         nop
     ]], 0x1B)
 
+    -- 4 dwords too much
+    --c = 0; for _, a in ipairs{"ItemsTxt", "StdItemsTxt", "SpcItemsTxt", "PotionTxt"} do c = c + Game[a].Limit * Game[a].ItemSize end; print((c):tohex())
+    -- normal 0x659D, new 0x6575
     hook(mem.findcode(addr, NOP), function(d)
-        local itemCount, stdItemCount, spcItemCount = DataTables.ComputeRowCountInPChar(u4[itemsTxtDataPtr], 0, 1) - 3,
+        local itemCount, stdItemCount, spcItemCount = DataTables.ComputeRowCountInPChar(u4[itemsTxtDataPtr], 0, 1) - 3 + 1, -- 0th item also counts
             DataTables.ComputeRowCountInPChar(u4[stdItemsTxtDataPtr], 1, 1) - 4, DataTables.ComputeRowCountInPChar(u4[spcItemsTxtDataPtr], 1, 2) - 11
         local potionTxtCount = DataTables.ComputeRowCountInPChar(u4[useItemsTxtDataPtr], 0, 2) - 9 -- the file for this is useItems.txt
-        debug.Message(format("items %d, std %d, spc %d, potion %d", itemCount, stdItemCount, spcItemCount, potionTxtCount))
+        --debug.Message(format("items %d, std %d, spc %d, potion %d", itemCount, stdItemCount, spcItemCount, potionTxtCount))
 
         local origItemDataOffset = Game.ItemsTxt["?ptr"] - 4 -- -4 for size field
 
         local itemsSize, stdItemsSize, spcItemsSize, potionTxtSize = itemCount * Game.ItemsTxt.ItemSize, stdItemCount * Game.StdItemsTxt.ItemSize, spcItemCount * Game.SpcItemsTxt.ItemSize, potionTxtCount * potionTxtCount
         local newSpace = mem.StaticAlloc(itemsSize + stdItemsSize + spcItemsSize + potionTxtSize + 0x3A40)
-        u4[newSpace] = itemCount
+        u4[newSpace] = itemCount -- Game.ItemsTxt lenP
         local itemsOffset = newSpace + 4
         local stdItemsOffset = itemsOffset + itemsSize
         local spcItemsOffset = stdItemsOffset + stdItemsSize
@@ -461,6 +464,7 @@ do
         processReferencesTable("ItemsTxt", itemsOffset, itemCount, itemsTxtRefs, newSpace)
         processReferencesTable("StdItemsTxt", stdItemsOffset, stdItemCount, stdItemsTxtRefs)
         processReferencesTable("SpcItemsTxt", spcItemsOffset, spcItemCount, spcItemsTxtRefs)
+        mem.ChangeGameArray("PotionTxt", potionTxtOffset, potionTxtCount)
         --processReferencesTable("PotionTxt", potionTxtOffset, potionTxtCount, potionTxtRefs)
 
         -- move data pointers
@@ -508,16 +512,38 @@ do
         -- ]])
 
         -- generate item function stuff
-        local itemBuf = mem.StaticAlloc(itemCount * 4)
-        asmpatch(0x44896F, "mov edi, " .. itemBuf)
-        asmpatch(0x44897A, "mov ecx, " .. itemBuf)
-        asmpatch(0x448A3F, "mov eax, [" .. itemBuf .. "]")
-        asmpatch(0x448A60, "mov edi, " .. itemBuf)
-        asmpatch(0x448CE1, "mov edi, " .. itemBuf)
-        asmpatch(0x448CFB, "mov edx, " .. itemBuf)
-        asmpatch(0x448E25, "mov eax, [" .. itemBuf .. "]")
-        asmpatch(0x448E60, "mov eax, " .. itemBuf)
-        -- TODO: CHECK
+        do
+            local itemBuf = mem.StaticAlloc(itemCount * 4)
+            local hooks = HookManager{itemBuf = itemBuf}
+            hooks.asmhook2(0x448973, [[
+                mov edi, %itemBuf%
+            ]])
+            hooks.asmpatch(0x44897A, [[
+                mov ecx, %itemBuf%
+                sub edx,ebx
+            ]])
+            hooks.asmhook2(0x448A3F, [[
+                mov eax, [%itemBuf%]
+            ]])
+            hooks.asmpatch(0x448A5A, [[
+                jge absolute 0x448B40
+                mov edi, %itemBuf%
+            ]], 0xA)
+            hooks.asmhook2(0x448CDF, [[
+                mov edi, %itemBuf%
+            ]])
+            hooks.asmhook2(0x448CFB, [[
+                mov edx, %itemBuf%
+            ]])
+            hooks.asmhook2(0x448E25, [[
+                mov eax, [%itemBuf%]
+            ]])
+            hooks.asmhook2(0x448E5C, [[
+                mov eax, %itemBuf%
+            ]])
+            -- TODO: CHECK
+            -- TODO: change all to asmpatches to have no useless instructions? (low priority)
+        end
 
         -- golden touch
         autohook2(0x428722, function(d)
@@ -567,8 +593,8 @@ do
                 buf = buf, itemCount = itemCount
             }.asmpatch(0x448A1F, [[
                 ; edi = item id
-                mov al, [%buf% + edi - 1]
-                test al, al
+                mov cl, [%buf% + edi - 1]
+                test cl, cl
                 jne absolute 0x4489A2
                 ; current cannot be generated - find first which can
                 push esi
@@ -576,8 +602,10 @@ do
                 lea edi, [%buf% + esi]
                 mov ecx, %itemCount%
                 sub ecx, esi
-                or al, 1
+                push eax
+                mov al, 1
                 repne scasb
+                pop eax
                 xchg esi, edi
                 pop esi
                 jne @exit
