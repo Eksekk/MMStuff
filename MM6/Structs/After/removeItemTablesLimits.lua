@@ -307,7 +307,8 @@ do
     -- rnditems.txt is ChanceByLevel field of ItemsTxtItem
 
     local potionTxtRefs = {
-        [3] = {0x410BAF} -- this one really references unused space before, but since it's indexed by [1st potion item id * 29] + [2nd potion id], it uses address inside
+        [3] = {0x410BAF}, -- this one really references unused space before, but since it's indexed by [1st potion item id * 29] + [2nd potion id], it uses address inside
+        lowerBoundIncrease = 165,
     }
 	
     -- various enchantment power ranges etc.
