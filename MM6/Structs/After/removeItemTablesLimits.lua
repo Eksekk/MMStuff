@@ -12,6 +12,14 @@ end
 
 if mmver ~= 6 then return end
 
+--[[
+    REMOVE LIMITS WORKFLOW:
+    1) generate above text to facilitate finding references
+    2) find all references which are findable by search
+    3) patch each place where files are loaded, allocating space for data, asmpatching some addresses to use new data, and replace all references with function call
+    4) test and fix all bugs you can find
+]]
+
 local function getSpellQueueData(spellQueuePtr, targetPtr)
 	local t = {Spell = i2[spellQueuePtr], Caster = Party.PlayersArray[i2[spellQueuePtr + 2]]}
 	t.SpellSchool = ceil(t.Spell / 11)
@@ -142,6 +150,28 @@ function processRawAddresses(arrayName)
     --print(text)
 end
 
+function printSortedArraysData(arrs, dataOrigin)
+    arrs = arrs or {"ItemsTxt", "StdItemsTxt", "SpcItemsTxt", "PotionTxt", "ScrollTxt"}
+    dataOrigin = dataOrigin or Game.ItemsTxt["?ptr"] - 4
+    local out = {}
+    for k, name in pairs(arrs) do
+        local s = Game[name]
+        local low, high, size, itemSize, dataOffset = s["?ptr"], s["?ptr"] + s.Limit * s.ItemSize, s.Size, s.ItemSize, s["?ptr"] - dataOrigin
+        table.insert(out, {name = name, low = low, high = high, size = size, itemSize = itemSize, dataOffset = dataOffset})
+    end
+    table.sort(out, function(a, b) return a.low < b.low end)
+    for _, data in ipairs(out) do
+        print(format("%-15s %-17s %-17s %-17s %-17s %-17s",
+            data.name .. ":",
+            format("low = 0x%X", data.low),
+            format("high = 0x%X", data.high),
+            format("size = 0x%X", data.size),
+            format("itemSize = 0x%X", data.itemSize), 
+            format("dataOffset = 0x%X", data.dataOffset)
+        ))
+    end
+end
+
 function replacePtrs(t) -- addrTable, newAddr, origin, cmdSize, check)
     local func = t.func
     local arr = t.arr or u4
@@ -217,27 +247,6 @@ end
 -- if col #needCol is not empty, current count is updated to its index, otherwise nothing is done - meant to exclude empty entries at the end of some files
 
 do
-	--[[
-		local format = string.format
-		local arrs = {"ItemsTxt", "StdItemsTxt", "SpcItemsTxt", "Rnd" "PotionTxt", "ScrollTxt"}
-		local out = {}
-		for k, name in pairs(arrs) do
-			local s = Game[name]
-			local low, high, size, itemSize, dataOffset = s["?ptr"], s["?ptr"] + s.Limit * s.ItemSize, s.Size, s.ItemSize, s["?ptr"] - Game.ItemsTxt["?ptr"]
-			table.insert(out, {name = name, low = low, high = high, size = size, itemSize = itemSize, dataOffset = dataOffset})
-		end
-		table.sort(out, function(a, b) return a.low < b.low end)
-		for _, data in ipairs(out) do
-			print(format("%-15s %-17s %-17s %-17s %-17s %-17s",
-				data.name .. ":",
-				format("low = 0x%X", data.low),
-				format("high = 0x%X", data.high),
-				format("size = 0x%X", data.size),
-				format("itemSize = 0x%X", data.itemSize), 
-				format("dataOffset = 0x%X", data.dataOffset)
-			))
-		end
-	]]
 
 	--[[
 		ItemsTxt:       low = 0x560C14    high = 0x5666DC   size = 0x5AC8     itemSize = 0x28   dataOffset = 0x0 
@@ -297,13 +306,9 @@ do
 
     -- rnditems.txt is ChanceByLevel field of ItemsTxtItem
 
-	--[[
-		REMOVE LIMITS WORKFLOW:
-		1) generate above text to facilitate finding references
-		2) find all references which are findable by search
-		3) patch each place where files are loaded, allocating space for data, asmpatching some addresses to use new data, and replace all references with function call
-		4) test and fix all bugs you can find
-	]]
+    local potionTxtRefs = {
+        [3] = {0x410BAF} -- this one really references unused space before, but since it's indexed by [1st potion item id * 29] + [2nd potion id], it uses address inside
+    }
 	
     -- various enchantment power ranges etc.
 	local otherItemDataRefs = {
@@ -389,9 +394,10 @@ do
         nop
     ]], 0x1B)
 
-    -- 4 dwords too much
-    --c = 0; for _, a in ipairs{"ItemsTxt", "StdItemsTxt", "SpcItemsTxt", "PotionTxt"} do c = c + Game[a].Limit * Game[a].ItemSize end; print((c):tohex())
-    -- normal 0x659D, new 0x6575
+    --> (Game.PotionTxt[164].?ptr + 5):tohex()
+  --"56A7F9"
+
+    --for i = 1, 100 do Party[0].Items[1]:Randomize(6) end
     hook(mem.findcode(addr, NOP), function(d)
         local itemCount, stdItemCount, spcItemCount = DataTables.ComputeRowCountInPChar(u4[itemsTxtDataPtr], 0, 1) - 3 + 1, -- 0th item also counts
             DataTables.ComputeRowCountInPChar(u4[stdItemsTxtDataPtr], 1, 1) - 4, DataTables.ComputeRowCountInPChar(u4[spcItemsTxtDataPtr], 1, 2) - 11
@@ -410,7 +416,7 @@ do
         local otherDataOffset = potionTxtOffset + potionTxtSize
 
         -- keys are values after which value needs to be added to data offset (requires summing all of those that are passed)
-        -- REQUIRES to be before game arrays are changed
+        -- this code block must be run before game arrays are changed
         local breakpoints = {}
         do
             local gameArrays = {4, {Game.ItemsTxt, itemsSize}, {Game.StdItemsTxt, stdItemsSize}, {Game.SpcItemsTxt, spcItemsSize}, 0x3918, {Game.PotionTxt, potionTxtSize}, 0x127}
@@ -464,13 +470,14 @@ do
         processReferencesTable("ItemsTxt", itemsOffset, itemCount, itemsTxtRefs, newSpace)
         processReferencesTable("StdItemsTxt", stdItemsOffset, stdItemCount, stdItemsTxtRefs)
         processReferencesTable("SpcItemsTxt", spcItemsOffset, spcItemCount, spcItemsTxtRefs)
-        mem.ChangeGameArray("PotionTxt", potionTxtOffset, potionTxtCount)
-        --processReferencesTable("PotionTxt", potionTxtOffset, potionTxtCount, potionTxtRefs)
+        processReferencesTable("PotionTxt", potionTxtOffset, potionTxtCount, potionTxtRefs)
 
-        -- move data pointers
-        -- for i, v in ipairs{itemsTxtDataPtr, rndItemsDataPtr, stdItemsTxtDataPtr, spcItemsTxtDataPtr} do
-        --     u4[v - origItemDataOffset] = u4[v]
-        -- end
+        -- update mmextension hardcoded address
+        do
+            local i, val = debug.findupvalue(structs.Item.Randomize, "pItems")
+            assert(i)
+            debug.setupvalue(structs.Item.Randomize, i, newSpace)
+        end
 
         -- esi points at start of data (items.txt size field)
         d.esi = newSpace
@@ -489,8 +496,8 @@ do
         asmpatch(0x449D22, "mov eax, " .. u4[spcItemsTxtDataPtr], 0x1B)
 
         hooks.ref.lastRndItemsIndex = mem.StaticAlloc(4)
-        -- don't require rnditems.txt to have filled data for all items
 
+        -- don't require rnditems.txt to have filled data for all items
         hooks.asmpatch(0x4497F9, [[
             ; if there is more data, next character is newline and then a digit
             mov al, [esi + 1]
@@ -498,6 +505,7 @@ do
             jb @done
             cmp al, '9'
             ja @done
+            ; TODO: at most [item count] rows
             jmp @exit
             @done:
                 mov [%lastRndItemsIndex%], edi
