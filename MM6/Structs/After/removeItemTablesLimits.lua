@@ -253,6 +253,7 @@ do
         StdItemsTxt:    low = 0x5666DC    high = 0x5667F4   size = 0x118      itemSize = 0x14   dataOffset = 0x5AC8
         SpcItemsTxt:    low = 0x5667F4    high = 0x566E68   size = 0x674      itemSize = 0x1C   dataOffset = 0x5BE0
         PotionTxt:      low = 0x56A780    high = 0x56AAC9   size = 0x349      itemSize = 0x1D   dataOffset = 0x9B6C
+
         ScrollTxt:      low = 0x6A86A8    high = 0x6A8804   size = 0x15C      itemSize = 0x4    dataOffset = 0x147A94
 	]]
 
@@ -276,7 +277,7 @@ do
         }
     }
 
-    local stdItemsTxtRefs = {
+    local stdItemsTxtRefs = { -- relative done
         [2] = {0x4256CE, 0x425987, 0x425C2A},
         [3] = {0x41CB34, 0x4256F7, 0x4259B0, 0x425C53, 0x44870B},
     }
@@ -307,7 +308,7 @@ do
     -- rnditems.txt is ChanceByLevel field of ItemsTxtItem
 
     local potionTxtRefs = {
-        [3] = {0x410BAF}, -- this one really references unused space before, but since it's indexed by [1st potion item id * 29] + [2nd potion id], it uses address inside
+        [3] = {0x410BAF}, -- this one really references unused space before, but since it's indexed by [1st potion item id * 29] + [2nd potion id], it uses address inside as constant
         lowerBoundIncrease = 165,
     }
 	
@@ -320,8 +321,12 @@ do
 
     -- relative offsets from item data start
     local relativeItemDataRefs = {
-        [2] = {0x448F95, 0x4496C8, 0x449835, 0x44991E, 0x449932, 0x449946, 0x44996B, 0x44997F, 0x449993, 0x4499B8, 0x4499CC, 0x4499E0, 0x449A05, 0x449A19, 0x449A2D, 0x449A4B, 0x449A5C, 0x449A6D, 0x449A8B, 0x449A9C, 0x449AAD, 0x449AFF, 0x449B31, 0x449C32, 0x449C3C, 0x4465DE, 0x449D43, 0x449D75, 0x449EC1, 0x449ECB, 0x449ED5, 0x449EDD, 0x449EF4, 0x44A61B, 0x44A630, 0x44A645, 0x44A65A, 0x44A66F, 0x44A683, 0x44A692, 0x44A69E},
-        [3] = {0x448C3B, 0x448C4F}
+        [2] = {0x448F95, 0x4496C8, 0x449835, 0x44991E, 0x449932, 0x449946, 0x44996B, 0x44997F, 0x449993, 0x4499B8, 0x4499CC, 0x4499E0, 0x449A05, 0x449A19, 0x449A2D, 0x449A4B, 0x449A5C, 0x449A6D, 0x449A8B, 0x449A9C, 0x449AAD, 0x449AFF, 0x449B31, 0x449C32, 0x449C3C, 0x4465DE, 0x449D43, 0x449D75, 0x449EC1, 0x449ECB, 0x449ED5, 0x449EDD, 0x449EF4, 0x44A61B, 0x44A630, 0x44A645, 0x44A65A, 0x44A66F, 0x44A683, 0x44A692, 0x44A69E, 0x448CE7, 0x448D0F, 0x448E04},
+        [3] = {0x448C3B, 0x448C4F, 0x448CC9, 0x448E44, 0x448E8D, 0x448B00, 0x448B85, 0x448BA1, 0x448BE9, 0x448C05, 0x448C10, 0x448C9E, 0x448CAA,
+            -- stditems.txt
+            0x448C86,
+            -- 0x448D4E, 0x448D8A, 0x448DBC, 0x448DE2, -- these are not changed, because final offset is calculated with pointer to spcbonus with already corrected value
+        }
     }
 
     -- 0x6BA998 is scroll.txt contents
@@ -339,6 +344,7 @@ do
     -- sum of all item chances for each of 6 treasure levels from rnditems.txt (0x56AADC, 6 dwords),
     -- bonus chance by level from rnditems.txt (dword, level 1-6): standard, special, special% : 0x56AAF4, 18 dwords
     -- std item bonus chances (column sums) : 0x56AB3C, 9 dwords
+    -- std bonus strength ranges: [min, max] for each treasure level: 0x56AB60, 12 dwords
     -- std bonus strength ranges: [min, max] for each treasure level: 0x56AB60, 12 dwords
     -- spc item bonus chances (column sums): 0x56AB90, 12 dwords
     -- 0x8 zero bytes
@@ -403,7 +409,6 @@ do
         local itemCount, stdItemCount, spcItemCount = DataTables.ComputeRowCountInPChar(u4[itemsTxtDataPtr], 0, 1) - 3 + 1, -- 0th item also counts
             DataTables.ComputeRowCountInPChar(u4[stdItemsTxtDataPtr], 1, 1) - 4, DataTables.ComputeRowCountInPChar(u4[spcItemsTxtDataPtr], 1, 2) - 11
         local potionTxtCount = DataTables.ComputeRowCountInPChar(u4[useItemsTxtDataPtr], 0, 2) - 9 -- the file for this is useItems.txt
-        --debug.Message(format("items %d, std %d, spc %d, potion %d", itemCount, stdItemCount, spcItemCount, potionTxtCount))
 
         local origItemDataOffset = Game.ItemsTxt["?ptr"] - 4 -- -4 for size field
 
@@ -435,7 +440,13 @@ do
             breakpoints[offset] = 0
             --debug.Message(dump(breakpoints))
         end
-
+        local c = 0
+        for k, v in pairs(breakpoints) do
+            c = max(c, k)
+        end
+        debug.Message(unpack{format("items %d, std %d, spc %d, potion %d, max bp %d", itemCount, stdItemCount, spcItemCount, potionTxtCount, c),
+            format("size item %d, std %d, spc %d, potion %d, full %d", itemsSize, stdItemsSize, spcItemsSize, potionTxtSize, itemsSize + stdItemsSize + spcItemsSize + potionTxtSize + 0x3A43)})
+        -- weapons crash
         local minOldOff, maxOldOff, minNewOff, maxNewOff = 0, 0, 0, 0
         for offset, shift in pairs(breakpoints) do
             maxOldOff = max(maxOldOff, offset)
@@ -478,6 +489,7 @@ do
             local i, val = debug.findupvalue(structs.Item.Randomize, "pItems")
             assert(i)
             debug.setupvalue(structs.Item.Randomize, i, newSpace)
+            -- MORE METHODS NEED THIS
         end
 
         -- esi points at start of data (items.txt size field)
