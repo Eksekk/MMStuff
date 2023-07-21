@@ -340,12 +340,11 @@ do
     end)
 
     -- ITEM DATA MEMORY LAYOUT:
-    -- items.txt size, items.txt, stditems.txt, spcitems.txt, 0x3918 placeholder bytes, potions.txt, 4 empty bytes, data pointers (items.txt, rnditems.txt, stditems.txt, spcitems.txt)
-    -- sum of all item chances for each of 6 treasure levels from rnditems.txt (0x56AADC, 6 dwords),
-    -- bonus chance by level from rnditems.txt (dword, level 1-6): standard, special, special% : 0x56AAF4, 18 dwords
-    -- std item bonus chances (column sums) : 0x56AB3C, 9 dwords
-    -- std bonus strength ranges: [min, max] for each treasure level: 0x56AB60, 12 dwords
-    -- std bonus strength ranges: [min, max] for each treasure level: 0x56AB60, 12 dwords
+    -- items.txt size, items.txt, stditems.txt, spcitems.txt, 0x3918 placeholder bytes, potions.txt, 3 empty bytes, data pointers (items.txt, rnditems.txt, stditems.txt, spcitems.txt), 4 zero bytes
+    -- [0] sum of all item chances for each of 6 treasure levels from rnditems.txt (0x56AADC, 6 dwords)
+    -- [0x9] bonus chance by level from rnditems.txt (dword, level 1-6): standard, special, special% : 0x56AAF4, 18 dwords
+    -- [0x60] std item bonus chances (column sums) : 0x56AB3C, 9 dwords
+    -- [0x84] std bonus strength ranges: [min, max] for each treasure level: 0x56AB60, 12 dwords
     -- spc item bonus chances (column sums): 0x56AB90, 12 dwords
     -- 0x8 zero bytes
     -- spc items highest index (dword)
@@ -420,6 +419,7 @@ do
         local spcItemsOffset = stdItemsOffset + stdItemsSize
         local potionTxtOffset = spcItemsOffset + spcItemsSize + 0x3918
         local otherDataOffset = potionTxtOffset + potionTxtSize
+        local enchantmentDataOffset = otherDataOffset + 3 + 0x10
 
         -- keys are values after which value needs to be added to data offset (requires summing all of those that are passed)
         -- this code block must be run before game arrays are changed
@@ -479,6 +479,22 @@ do
             replacePtrs{addrTable = addresses, cmdSize = cmdSize, origin = 0x56AADC, newAddr = otherDataOffset, check = check}
         end
 
+        -- fix stdbonus chance sums breaking due to weird addressing (can't keep )
+        asmpatch(0x449C9D, "mov dword ptr [esp+0x1C]," .. enchantmentDataOffset - newSpace + 0x7C)
+        asmpatch(0x449CF9, [[
+            lea ecx, [ecx + ebp * 4]
+            mov [ebx+ecx],eax
+        ]], 5)
+        HookManager{
+            afterEnd = enchantmentDataOffset - newSpace + 0x7C + 6 * 2 * 4
+        }.asmpatch(0x449D14, [[
+            add eax, 8
+            cmp eax, %afterEnd%
+        ]])
+        
+        -- or, if offset due to more data was always a multiple of 4 (so no potion txt changes), this one line would do the trick
+        -- asmpatch(0x449C9D, "mov dword ptr [esp+0x1C]," .. (enchantmentDataOffset - newSpace + 0x7C):div(4))
+
         processReferencesTable("ItemsTxt", itemsOffset, itemCount, itemsTxtRefs, newSpace)
         processReferencesTable("StdItemsTxt", stdItemsOffset, stdItemCount, stdItemsTxtRefs)
         processReferencesTable("SpcItemsTxt", spcItemsOffset, spcItemCount, spcItemsTxtRefs)
@@ -489,7 +505,7 @@ do
             local i, val = debug.findupvalue(structs.Item.Randomize, "pItems")
             assert(i)
             debug.setupvalue(structs.Item.Randomize, i, newSpace)
-            -- MORE METHODS NEED THIS
+            -- FIXME: MORE METHODS NEED THIS
         end
 
         -- esi points at start of data (items.txt size field)
