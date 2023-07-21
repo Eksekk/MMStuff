@@ -1,5 +1,6 @@
 local u1, u2, u4, i1, i2, i4 = mem.u1, mem.u2, mem.u4, mem.i1, mem.i2, mem.i4
 local hook, autohook, autohook2, asmpatch = mem.hook, mem.autohook, mem.autohook2, mem.asmpatch
+local StaticAlloc = mem.StaticAlloc
 local max, min, floor, ceil, round, random = math.max, math.min, math.floor, math.ceil, math.round, math.random
 local format = string.format
 
@@ -11,6 +12,10 @@ function mmv(...)
 end
 
 if mmver ~= 6 then return end
+
+local function GetPlayer(ptr)
+    return Party[(ptr - Party[0]["?ptr"]) / Party.ItemSize]
+end
 
 --[[
     REMOVE LIMITS WORKFLOW:
@@ -335,7 +340,7 @@ do
         
         -- needs consideration: make item id be binding instead of row index?
         local count = DataTables.ComputeRowCountInPChar(d.eax, 1, 1)
-        local newScrollSpaceAddr = mem.StaticAlloc(count * 4) -- editpchar size
+        local newScrollSpaceAddr = StaticAlloc(count * 4) -- editpchar size
         processReferencesTable("ScrollTxt", newScrollSpaceAddr, count, scrollTxtRefs)
     end)
 
@@ -412,7 +417,7 @@ do
         local origItemDataOffset = Game.ItemsTxt["?ptr"] - 4 -- -4 for size field
 
         local itemsSize, stdItemsSize, spcItemsSize, potionTxtSize = itemCount * Game.ItemsTxt.ItemSize, stdItemCount * Game.StdItemsTxt.ItemSize, spcItemCount * Game.SpcItemsTxt.ItemSize, potionTxtCount * potionTxtCount
-        local newSpace = mem.StaticAlloc(itemsSize + stdItemsSize + spcItemsSize + potionTxtSize + 0x3A40)
+        local newSpace = StaticAlloc(itemsSize + stdItemsSize + spcItemsSize + potionTxtSize + 0x3A40)
         u4[newSpace] = itemCount -- Game.ItemsTxt lenP
         local itemsOffset = newSpace + 4
         local stdItemsOffset = itemsOffset + itemsSize
@@ -495,6 +500,168 @@ do
         -- or, if offset due to more data was always a multiple of 4 (so no potion txt changes), this one line would do the trick
         -- asmpatch(0x449C9D, "mov dword ptr [esp+0x1C]," .. (enchantmentDataOffset - newSpace + 0x7C):div(4))
 
+        do
+            local enchOffset = 0x84
+            evt.StdBonusStrengthRanges = setmetatable({}, {__index = function(t, i)
+                assert(i >= 1 and i <= 6, "Invalid treasure level")
+                local ret = setmetatable({}, {__index = function(_, j)
+                    assert(j >= 0 and j <= 1, "Invalid index - this table is from 0 to 1")
+                    return u4[enchantmentDataOffset + enchOffset + (i - 1) * 8 + j * 4]
+                end, __newindex = function(_, j, val)
+                    assert(j >= 0 and j <= 1, "Invalid index - this table is from 0 to 1")
+                    u4[enchantmentDataOffset + enchOffset + (i - 1) * 8 + j * 4] = val
+                end})
+                return rawset(t, i, ret)
+            end, __newindex = function(t, i, val)
+                if type(val) ~= "table" then
+                    error("Table value expected", 2)
+                elseif #val < 2 then
+                    error("Table must have at least 2 values, starting from index 1", 2)
+                end
+                t[i][0] = val[1]
+                t[i][1] = val[2]
+            end})
+            --[[
+                -- [0] sum of all item chances for each of 6 treasure levels from rnditems.txt (0x56AADC, 6 dwords)
+                -- [0x9] bonus chance by level from rnditems.txt (dword, level 1-6): standard, special, special% : 0x56AAF4, 18 dwords
+                -- [0x60] std item bonus chances (column sums) : 0x56AB3C, 9 dwords
+                -- [0x84] std bonus strength ranges: [min, max] for each treasure level: 0x56AB60, 12 dwords
+                -- spc item bonus chances (column sums): 0x56AB90, 12 dwords
+            ]]
+            local function makeMemoryTogglerTable(t)
+                local arr, buf, minIndex, maxIndex = t.arr, t.buf, t.minIndex, t.maxIndex
+                local bool, errorFormat = t.bool, t.errorFormat
+                local mt = {__index = function(t, i)
+                    if i < minIndex or i > maxIndex then
+                        error(format(errorFormat, minIndex, maxIndex), 2)
+                    end
+                    if bool then
+                        return arr[buf + i] ~= 0
+                    else
+                        return arr[buf + i]
+                    end
+                end, __newindex = function (t, i, val)
+                    if i < minIndex or i > maxIndex then
+                        error(format(errorFormat, minIndex, maxIndex), 2)
+                    end
+                    if bool then
+                        arr[buf + i] = val and 1 or 0
+                    else
+                        arr[buf + i] = val
+                    end
+                end}
+                return setmetatable({}, mt)
+            end
+
+            --[[
+            evt.RndItemsChanceSums = setmetatable({}, {__index = function(t, i)
+                if i < 1 or i > 6 then
+                    error("Valid indexes are from 1 to 6", 2)
+                end
+                return u4[enchantmentDataOffset + i - 1]
+            end, __newindex = function(t, i, val)
+                if i < 1 or i > 6 then
+                    error("Valid indexes are from 1 to 6", 2)
+                end
+                u4[enchantmentDataOffset + i - 1] = val
+            end})
+            ]]
+            evt.RndItemsChanceSums = makeMemoryTogglerTable{arr = u4, buf = enchantmentDataOffset - 1,
+                minIndex = 1, maxIndex = 6, errorFormat = "Valid indexes are from %d to %d"}
+            -- TODO: MORE
+
+            -- potions
+
+            -- items that activate potion mixing code
+            local isItemMixableBuf = StaticAlloc(itemCount)
+            mem.fill(isItemMixableBuf, itemCount, 0)
+            mem.fill(isItemMixableBuf + 160 - 1, 29, 1)
+
+            --[[
+            evt.IsItemMixable = setmetatable({}, {__index = function(_, i)
+                if i < 1 or i > itemCount then
+                    error("Invalid item id", 2)
+                end
+                return u1[isItemMixableBuf + i - 1] ~= 0
+            end, __newindex = function (_, i, v)
+                if i < 1 or i > itemCount then
+                    error("Invalid item id", 2)
+                end
+                u1[isItemMixableBuf + i - 1] = v and 1 or 0
+            end})
+            ]]
+            evt.IsItemMixable = makeMemoryTogglerTable{arr = u1, buf = isItemMixableBuf - 1, bool = true,
+                minIndex = 1, maxIndex = itemCount, errorFormat = "Invalid item id"}
+            
+            hooks.ref.isItemIdMixable = HookManager{
+                buf = isItemMixableBuf
+            }.asmproc([[
+                ; ecx - item id
+                xor eax, eax
+                mov al, [ecx + %buf% - 1]
+                ret
+            ]])
+
+            local isItemPotionBottleBuf = StaticAlloc(itemCount)
+            mem.fill(isItemPotionBottleBuf, itemCount, 0)
+            u1[isItemPotionBottleBuf + 162] = 1
+            mem.fill(isItemPotionBottleBuf + 188, 8, 1)
+            evt.IsItemPotionBottle = makeMemoryTogglerTable{arr = u1, buf = isItemPotionBottleBuf - 1, bool = true, 
+                minIndex = 1, maxIndex = itemCount, errorFormat = "Invalid item id"}
+            hooks.ref.isItemPotionBottle = HookManager{
+                buf = isItemPotionBottleBuf
+            }.asmproc([[
+                ; ecx - item id
+                xor eax, eax
+                mov al, [ecx + %buf% - 1]
+                ret
+            ]])
+
+            local isItemPotionBuf = StaticAlloc(itemCount)
+            mem.fill(isItemPotionBuf, itemCount, 0)
+            mem.fill(isItemPotionBuf + 163, 25, 1)
+            hooks.ref.isItemPotion = HookManager{
+                buf = isItemPotionBuf
+            }.asmproc([[
+                ; ecx - item id
+                xor eax, eax
+                mov al, [ecx + %buf% - 1]
+                ret
+            ]])
+
+            hooks.ref.mouseItem = Mouse.Item["?ptr"]
+            hooks.asmpatch(0x410B67, [[
+                push eax
+                mov ecx, eax
+                call absolute %isItemPotionBottle%
+                pop ecx
+                test al, al
+                jne absolute 0x41103A
+                call absolute %isItemIdMixable%
+                test al, al
+                je absolute 0x41103A
+                mov ecx,dword ptr [edi]
+                call absolute %isItemIdMixable%
+                test al, al
+                je absolute 0x41103A
+                mov eax, [%mouseItem%]
+                mov ecx, [edi]
+            ]], 0x3B)
+            
+            hooks.asmpatch(0x410B1C, [[
+                push eax
+                mov ecx, eax
+                call absolute %isItemPotion%
+                pop eax
+                je absolute 0x410B34
+            ]])
+
+            autohook(0x410BA2, function(d)
+                local t = {ClickedPotion = structs.Item:new(d.edi), MousePotion = Mouse.Item, Player = GetPlayer(d.esi)}
+
+            end)
+        end
+
         processReferencesTable("ItemsTxt", itemsOffset, itemCount, itemsTxtRefs, newSpace)
         processReferencesTable("StdItemsTxt", stdItemsOffset, stdItemCount, stdItemsTxtRefs)
         processReferencesTable("SpcItemsTxt", spcItemsOffset, spcItemCount, spcItemsTxtRefs)
@@ -505,7 +672,6 @@ do
             local i, val = debug.findupvalue(structs.Item.Randomize, "pItems")
             assert(i)
             debug.setupvalue(structs.Item.Randomize, i, newSpace)
-            -- FIXME: MORE METHODS NEED THIS
         end
 
         -- esi points at start of data (items.txt size field)
@@ -524,7 +690,7 @@ do
         asmpatch(0x449ADE, "mov eax, " .. u4[stdItemsTxtDataPtr], 0x1B)
         asmpatch(0x449D22, "mov eax, " .. u4[spcItemsTxtDataPtr], 0x1B)
 
-        hooks.ref.lastRndItemsIndex = mem.StaticAlloc(4)
+        hooks.ref.lastRndItemsIndex = StaticAlloc(4)
 
         -- don't require rnditems.txt to have filled data for all items
         hooks.asmpatch(0x4497F9, [[
@@ -550,7 +716,7 @@ do
 
         -- generate item function stuff
         do
-            local itemBuf = mem.StaticAlloc(itemCount * 4)
+            local itemBuf = StaticAlloc(itemCount * 4)
             local hooks = HookManager{itemBuf = itemBuf}
             hooks.asmhook2(0x448973, [[
                 mov edi, %itemBuf%
@@ -609,7 +775,7 @@ do
 
         -- can item be generated, TODO: patch all instance3s
         do
-            local buf = mem.StaticAlloc(itemCount)
+            local buf = StaticAlloc(itemCount)
             mem.fill(buf, 400, 1) -- normal items
             mem.fill(buf + 400, itemCount - 400, 0) -- artifacts and quest items and after
             local can = setmetatable({}, {__index = function(_, i)
