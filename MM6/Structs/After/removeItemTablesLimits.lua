@@ -531,7 +531,7 @@ do
             local function makeMemoryTogglerTable(t)
                 local arr, buf, minIndex, maxIndex = t.arr, t.buf, t.minIndex, t.maxIndex
                 local bool, errorFormat = t.bool, t.errorFormat
-                local mt = {__index = function(t, i)
+                local mt = {__index = function(_, i)
                     if i < minIndex or i > maxIndex then
                         error(format(errorFormat, minIndex, maxIndex), 2)
                     end
@@ -540,7 +540,7 @@ do
                     else
                         return arr[buf + i]
                     end
-                end, __newindex = function (t, i, val)
+                end, __newindex = function (_, i, val)
                     if i < minIndex or i > maxIndex then
                         error(format(errorFormat, minIndex, maxIndex), 2)
                     end
@@ -829,6 +829,34 @@ do
             end
             events.cocall("ArtifactGenerated", t)
         end)
+
+        -- DRAWING --
+
+        -- belts
+        autohook2(0x412918, function(d)
+            local pl = GetPlayer(d.ebp)
+            local t = {Player = pl, Item = pl.Items[pl.ItemBelt], BitmapId = d.ebx}
+            events.call("GetItemBitmap", t)
+            d.ebx = t.BitmapId
+        end)
+
+        -- TODO: lua is a bit too slow, use text table
+
+        local bitmapIdsByName = {}
+        local function fillInBitmaps()
+            for i, v in Game.IconsLod.Bitmaps do
+                bitmapIdsByName[v.Name:lower()] = i
+            end
+        end
+
+        function events.GetItemBitmap(t)
+            if not next(bitmapIdsByName) then
+                fillInBitmaps()
+            end
+            if t.Item.Number == 588 then
+                t.BitmapId = bitmapIdsByName.belt2b
+            end
+        end
 
         -- TODO: generateArtifact (0x44A6B0)
 
