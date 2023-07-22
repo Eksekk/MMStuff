@@ -14,7 +14,7 @@ end
 if mmver ~= 6 then return end
 
 local function GetPlayer(ptr)
-    return Party[(ptr - Party[0]["?ptr"]) / Party.ItemSize]
+    return Party[(ptr - Party[0]["?ptr"]) / Party[0]["?size"]]
 end
 
 --[[
@@ -643,35 +643,119 @@ do
     -- FIX ALCHEMY BUG (mouse items turning to potion bottle when swapping weapons)
 
     function processItemsDrawing()
+        local itemCount = Game.ItemsTxt.Limit
         -- DRAWING --
 
         -- needed: belts, helms, armors
 
+        local function getArmorPicsFromName(name)
+            local base = name:match("(.-)icon")
+            assert(base)
+            return base .. "bod", base .. "arm1", base .. "arm2"
+        end
+
+        local beltIconIds, helmetIconIds, armorItemIds = StaticAlloc(itemCount * 4), StaticAlloc(itemCount * 4), StaticAlloc(itemCount * 4 * 3)
+        local armorCoordsByImage = {} -- needed for custom armor offsets
+        local function process()
+            for i, item in Game.ItemsTxt do
+                if item.EquipStat == const.ItemType.Armor - 1 then
+                    local body, arm1, arm2 = getArmorPicsFromName(item.Picture)
+                    local baseOff = (i - 1) * 12
+                    u4[armorItemIds + baseOff] = Game.IconsLod:LoadBitmap(body)
+                    u4[armorItemIds + baseOff + 4] = Game.IconsLod:LoadBitmap(arm1)
+                    u4[armorItemIds + baseOff + 8] = Game.IconsLod:LoadBitmap(arm2)
+                elseif item.EquipStat == const.ItemType.Belt - 1 then
+                    local name = assert(item.Picture:match("(belt%d+)[abAB]")) .. "b"
+                    u4[beltIconIds + (i - 1) * 4] = Game.IconsLod:LoadBitmap(name)
+                elseif item.EquipStat == const.ItemType.Helm - 1 then
+                    local id = item.Picture:match("he?lm(%d+)")
+                    local name
+                    if id then
+                        name = "helm" .. id
+                    end
+                    id = item.Picture:match("hat(%d+)")
+                    if id then
+                        name = "hat" .. id .. "b"
+                    end
+                    if not name then
+                        name = assert(item.Picture:match("(crown%d+)")) .. "b"
+                    end
+                    u4[helmetIconIds + (i - 1) * 4] = Game.IconsLod:LoadBitmap(name)
+                end
+            end
+        end
+
+        if GameInitialized2 then
+            process()
+        else
+            events.GameInitialized2 = process
+        end
+
+        local hooks = HookManager{belts = beltIconIds, helmets = helmetIconIds, armors = armorItemIds}
+
+        -- armors
+        hooks.asmpatch(0x4125C8, [[
+            push ecx
+            mov eax, [ebp+0x1434] ; item armor
+            lea ecx, [eax * 8]
+            sub ecx, eax
+            mov eax, [ebp+ecx*4+0x128] ; item id
+            dec eax
+            lea eax, [eax * 4]
+            mov edi, [eax + eax * 2 + %armors%]
+            pop ecx
+            test cl, 2
+        ]], 0xA)
+
+        -- checkIndex function for automatic erroring if index is invalid, with stack level to error on, increase by 1 inside
+        local armorXYbuf = StaticAlloc(itemCount * 2 * 2)
+        local armorXYwasSet = StaticAlloc(itemCount * 1)
+        local armorXY = {}
+        function armorXY.clearCustomCoords(id)
+            u1[armorXYwasSet + id - 1] = 0
+        end
+        setmetatable(armorXY, {__index = function(_, itemId)
+            return {u2[armorXYbuf + (itemId - 1) * 4], u2[armorXYbuf + (itemId - 1) * 4 + 2]}
+        end,
+        __newindex = function (_, itemId, val)
+            u1[armorXYwasSet + itemId - 1] = 1
+            u2[armorXYbuf + (itemId - 1) * 4], u2[armorXYbuf + (itemId - 1) * 4 + 2] = val[1], val[2]
+        end})
+        evt.ArmorXY = armorXY
+        -- FIXME: set defaults
+
+        hooks.ref.armorXYbuf = armorXYbuf
+        hooks.ref.armorXYwasSet = armorXYwasSet
+        hooks.asmhook(0x4125A9, [[
+            push ecx
+            mov edx, [ebp+0x1434] ; item armor
+            lea ecx, [edx * 8]
+            sub ecx, edx
+            mov edx, [ebp+ecx*4+0x128] ; item id
+            dec edx
+            mov cl, [%armorXYwasSet% + edx]
+            test cl, cl
+            pop ecx
+            je @std
+            lea edx, [edx * 4]
+            mov edi, [edx + edx * 2 + %armors%]
+            dec edi
+            movsx edx, word [%armorXYbuf% + edi * 4 + 2] ; Y
+            movsx edi, word [%armorXYbuf% + edi * 4] ; X
+            jmp absolute 0x4125B9
+
+            @std:
+        ]], 0x10)
+
         -- belts
-        autohook2(0x412918, function(d)
-            local pl = GetPlayer(d.ebp)
-            local t = {Player = pl, Item = pl.Items[pl.ItemBelt], BitmapId = d.ebx}
-            events.call("GetItemBitmap", t)
-            d.ebx = t.BitmapId
-        end)
+        hooks.asmpatch(0x412918, [[
+            mov ebx, [eax * 4 + %belts% - 4]
+        ]], 0x7)
 
-        -- TODO: lua is a bit too slow, use text table
-
-        local bitmapIdsByName = {}
-        local function fillInBitmaps()
-            for i, v in Game.IconsLod.Bitmaps do
-                bitmapIdsByName[v.Name:lower()] = i
-            end
-        end
-
-        function events.GetItemBitmap(t)
-            if not next(bitmapIdsByName) then
-                fillInBitmaps()
-            end
-            if t.Item.Number == 588 then
-                t.BitmapId = bitmapIdsByName.belt2b
-            end
-        end
+        -- scanline offset is top left pixel address
+        -- value is offset in pixels
+        -- value % Screen.Width (640) is y offset from top, value:div(Screen.Width) is x offset from left
+        -- 0x4CA888 weakest chain armor scanline offset
     end
     
     local function makeMemoryTogglerTable(t)
@@ -740,18 +824,8 @@ do
             local buf = StaticAlloc(itemCount)
             mem.fill(buf, 400, 1) -- normal items
             mem.fill(buf + 400, itemCount - 400, 0) -- artifacts and quest items and after
-            local can = setmetatable({}, {__index = function(_, i)
-                if i > itemCount then
-                    error(format("Invalid item id %d", i), 2)
-                end
-                return u1[buf + i - 1] ~= 0
-            end,
-            __newindex = function(_, i, v)
-                if i > itemCount then
-                    error(format("Invalid item id %d", i), 2)
-                end
-                u1[buf + i - 1] = v and 1 or 0
-            end})
+            local can = makeMemoryTogglerTable{buf = buf, arr = u1, size = 1, minIndex = 1, maxIndex = itemCount,
+                bool = true, errorFormat = "Invalid item id (range: [%d %d])"}
             -- if value at index idx is 0, item idx cannot be generated (artifacts and quest items by default), otherwise it can
             evt.CanItemBeRandomlyFound = can
             HookManager{
