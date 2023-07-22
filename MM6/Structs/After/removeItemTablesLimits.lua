@@ -685,15 +685,21 @@ do
             end
         end
 
-        if GameInitialized2 then
-            process()
-        else
-            events.GameInitialized2 = process
+        local function callWhenGameInitialized(f, ...)
+            if GameInitialized2 then
+                f(...)
+            else
+                local args = {...}
+                events.GameInitialized2 = function() f(unpack(args)) end
+            end
         end
+
+        callWhenGameInitialized(process)
 
         local hooks = HookManager{belts = beltIconIds, helmets = helmetIconIds, armors = armorItemIds}
 
         -- armors
+        -- correct bitmap id
         hooks.asmpatch(0x4125C8, [[
             push ecx
             mov eax, [ebp+0x1434] ; item armor
@@ -707,22 +713,50 @@ do
             test cl, 2
         ]], 0xA)
 
+        -- show custom armors with indexes other than builtin ones
+        mem.nop(0x4125A7)
+
         -- checkIndex function for automatic erroring if index is invalid, with stack level to error on, increase by 1 inside
         local armorXYbuf = StaticAlloc(itemCount * 2 * 2)
         local armorXYwasSet = StaticAlloc(itemCount * 1)
-        local armorXY = {}
-        function armorXY.clearCustomCoords(id)
+        local paperdollArmorXY = {}
+        function paperdollArmorXY.clearCustomCoords(id)
             u1[armorXYwasSet + id - 1] = 0
         end
-        setmetatable(armorXY, {__index = function(_, itemId)
-            return {u2[armorXYbuf + (itemId - 1) * 4], u2[armorXYbuf + (itemId - 1) * 4 + 2]}
+        setmetatable(paperdollArmorXY, {__index = function(_, itemId)
+            return {i2[armorXYbuf + (itemId - 1) * 4], i2[armorXYbuf + (itemId - 1) * 4 + 2]}
         end,
         __newindex = function (_, itemId, val)
             u1[armorXYwasSet + itemId - 1] = 1
-            u2[armorXYbuf + (itemId - 1) * 4], u2[armorXYbuf + (itemId - 1) * 4 + 2] = val[1], val[2]
+            i2[armorXYbuf + (itemId - 1) * 4], i2[armorXYbuf + (itemId - 1) * 4 + 2] = val[1], val[2]
         end})
-        evt.ArmorXY = armorXY
+        evt.PaperdollArmorXY = paperdollArmorXY
+
+        -- default coords for already existing images
+        callWhenGameInitialized(function()
+            local idsByPic = {}
+            for armorId = 66, 78 do
+                local pic = Game.ItemsTxt[armorId].Picture
+                idsByPic[pic:lower()] = armorId
+            end
+
+            for i, item in Game.ItemsTxt do
+                if (i < 66 or i > 78) and idsByPic[item.Picture:lower()] then
+                    local index = idsByPic[item.Picture:lower()] - 66
+                    paperdollArmorXY[i] = {i2[0x4BCDF8 + index * 2], i2[0x4BCE14 + index * 2]}
+                end
+            end
+        end)
+
         -- FIXME: set defaults
+        -- TODO: better?
+        --[[
+            local x = armorCoords[5].X
+            armorCoords[5].XY = {3, 4}
+            local a = armorCoords[2]
+            local x, y = a.XY
+            a.X, a.Y = x + 5, y + 10
+        ]]
 
         hooks.ref.armorXYbuf = armorXYbuf
         hooks.ref.armorXYwasSet = armorXYwasSet
@@ -737,8 +771,10 @@ do
             test cl, cl
             pop ecx
             je @std
-            lea edx, [edx * 4]
-            mov edi, [edx + edx * 2 + %armors%]
+            mov edi, [ebp+0x1434] ; item armor
+            lea edx, [edi * 8]
+            sub edx, edi
+            mov edi, [ebp+edx*4+0x128] ; item id
             dec edi
             movsx edx, word [%armorXYbuf% + edi * 4 + 2] ; Y
             movsx edi, word [%armorXYbuf% + edi * 4] ; X
@@ -751,6 +787,11 @@ do
         hooks.asmpatch(0x412918, [[
             mov ebx, [eax * 4 + %belts% - 4]
         ]], 0x7)
+
+        -- helmets
+        hooks.asmpatch(0x412669, [[
+            mov edi, [ecx * 4 + %helmets% - 4]
+        ]], 0x19)
 
         -- scanline offset is top left pixel address
         -- value is offset in pixels
