@@ -13,16 +13,26 @@ end
 
 if mmver ~= 6 then return end
 
+local function callWhenGameInitialized(f, ...)
+    if GameInitialized2 then
+        f(...)
+    else
+        local args = {...}
+        events.GameInitialized2 = function() f(unpack(args)) end
+    end
+end
+
 local function GetPlayer(ptr)
     return Party[(ptr - Party[0]["?ptr"]) / Party[0]["?size"]]
 end
 
 --[[
     REMOVE LIMITS WORKFLOW:
-    1) generate above text to facilitate finding references
-    2) find all references which are findable by search
+    1) generate table offsets data to facilitate finding references
+    2) find all references which are findable by search (incl. size, limit, high, count, relative)
     3) patch each place where files are loaded, allocating space for data, asmpatching some addresses to use new data, and replace all references with function call
-    4) test and fix all bugs you can find
+    4) take care of various stuff related to specific tables (like, for items, patch function drawing paperdolls, patch alchemy so newly added potions will work etc.)
+    5) test and fix all bugs you can find
 ]]
 
 local function getSpellQueueData(spellQueuePtr, targetPtr)
@@ -408,7 +418,7 @@ do
     --> (Game.PotionTxt[164].?ptr + 5):tohex()
   --"56A7F9"
 
-    local processItemsDrawing, setMiscItemHooks, setAlchemyHooks
+    local setItemDrawingHooks, setMiscItemHooks, setAlchemyHooks
 
     --for i = 1, 100 do Party[0].Items[1]:Randomize(6) end
     hook(mem.findcode(addr, NOP), function(d)
@@ -428,7 +438,7 @@ do
         local otherDataOffset = potionTxtOffset + potionTxtSize
         local enchantmentDataOffset = otherDataOffset + 3 + 0x10
 
-        -- keys are values after which value needs to be added to data offset (requires summing all of those that are passed)
+        -- if base relative address is bigger than breakpoints key, value for that key needs to be added to make final address (requires summing all that apply)
         -- this code block must be run before game arrays are changed
         local breakpoints = {}
         do
@@ -447,13 +457,12 @@ do
             breakpoints[offset] = 0
             --debug.Message(dump(breakpoints))
         end
-        local c = 0
-        for k, v in pairs(breakpoints) do
-            c = max(c, k)
-        end
+        -- local c = 0
+        -- for k, v in pairs(breakpoints) do
+        --     c = max(c, k)
+        -- end
         -- debug.Message(unpack{format("items %d, std %d, spc %d, potion %d, max bp %d", itemCount, stdItemCount, spcItemCount, potionTxtCount, c),
         --     format("size item %d, std %d, spc %d, potion %d, full %d", itemsSize, stdItemsSize, spcItemsSize, potionTxtSize, itemsSize + stdItemsSize + spcItemsSize + potionTxtSize + 0x3A43)})
-        -- weapons crash
         local minOldOff, maxOldOff, minNewOff, maxNewOff = 0, 0, 0, 0
         for offset, shift in pairs(breakpoints) do
             maxOldOff = max(maxOldOff, offset)
@@ -486,7 +495,7 @@ do
             replacePtrs{addrTable = addresses, cmdSize = cmdSize, origin = 0x56AADC, newAddr = otherDataOffset, check = check}
         end
 
-        -- fix stdbonus chance sums breaking due to weird addressing (can't keep )
+        -- fix stdbonus chance sums breaking due to weird addressing
         asmpatch(0x449C9D, "mov dword ptr [esp+0x1C]," .. enchantmentDataOffset - newSpace + 0x7C)
         asmpatch(0x449CF9, [[
             lea ecx, [ecx + ebp * 4]
@@ -613,17 +622,7 @@ do
 
         -- asmpatch(0x4497F9, "cmp edi," .. itemCount)
 
-        mem.hookfunction(0x44A6B0, 1, 0, function(d, def, itemPtr)
-            local item = structs.Item:new(itemPtr)
-            local t = {Item = item, Allow = true}
-            events.cocall("GenerateArtifact", t)
-            if t.Allow then
-                def(itemPtr)
-            end
-            events.cocall("ArtifactGenerated", t)
-        end)
-
-        processItemsDrawing()
+        setItemDrawingHooks()
 
         -- TODO: generateArtifact (0x44A6B0)
 
@@ -642,7 +641,7 @@ do
 
     -- FIX ALCHEMY BUG (mouse items turning to potion bottle when swapping weapons)
 
-    function processItemsDrawing()
+    function setItemDrawingHooks()
         local itemCount = Game.ItemsTxt.Limit
         -- DRAWING --
 
@@ -660,10 +659,10 @@ do
             for i, item in Game.ItemsTxt do
                 if item.EquipStat == const.ItemType.Armor - 1 then
                     local body, arm1, arm2 = getArmorPicsFromName(item.Picture)
-                    local baseOff = (i - 1) * 12
-                    u4[armorItemIds + baseOff] = Game.IconsLod:LoadBitmap(body)
-                    u4[armorItemIds + baseOff + 4] = Game.IconsLod:LoadBitmap(arm1)
-                    u4[armorItemIds + baseOff + 8] = Game.IconsLod:LoadBitmap(arm2)
+                    local baseOff = armorItemIds + (i - 1) * 12
+                    u4[baseOff] = Game.IconsLod:LoadBitmap(body)
+                    u4[baseOff + 4] = Game.IconsLod:LoadBitmap(arm1)
+                    u4[baseOff + 8] = Game.IconsLod:LoadBitmap(arm2)
                 elseif item.EquipStat == const.ItemType.Belt - 1 then
                     local name = assert(item.Picture:match("(belt%d+)[abAB]")) .. "b"
                     u4[beltIconIds + (i - 1) * 4] = Game.IconsLod:LoadBitmap(name)
@@ -682,15 +681,6 @@ do
                     end
                     u4[helmetIconIds + (i - 1) * 4] = Game.IconsLod:LoadBitmap(name)
                 end
-            end
-        end
-
-        local function callWhenGameInitialized(f, ...)
-            if GameInitialized2 then
-                f(...)
-            else
-                local args = {...}
-                events.GameInitialized2 = function() f(unpack(args)) end
             end
         end
 
@@ -717,20 +707,82 @@ do
         mem.nop(0x4125A7)
 
         -- checkIndex function for automatic erroring if index is invalid, with stack level to error on, increase by 1 inside
-        local armorXYbuf = StaticAlloc(itemCount * 2 * 2)
+        local armorXYbuf = StaticAlloc(itemCount * 3 * 2 * 2) -- body and both arms
         local armorXYwasSet = StaticAlloc(itemCount * 1)
-        local paperdollArmorXY = {}
-        function paperdollArmorXY.clearCustomCoords(id)
+        local paperdollArmorCoords = {}
+        function paperdollArmorCoords.ClearCustomCoords(id)
             u1[armorXYwasSet + id - 1] = 0
         end
-        setmetatable(paperdollArmorXY, {__index = function(_, itemId)
-            return {i2[armorXYbuf + (itemId - 1) * 4], i2[armorXYbuf + (itemId - 1) * 4 + 2]}
-        end,
-        __newindex = function (_, itemId, val)
-            u1[armorXYwasSet + itemId - 1] = 1
-            i2[armorXYbuf + (itemId - 1) * 4], i2[armorXYbuf + (itemId - 1) * 4 + 2] = val[1], val[2]
-        end})
-        evt.PaperdollArmorXY = paperdollArmorXY
+        local function makeCoordsAccessor(itemId, offset)
+            return setmetatable({}, {
+                __index = function(_, what)
+                    what = what:lower()
+                    local x, y = i2[armorXYbuf + (itemId - 1) * 12 + offset], i2[armorXYbuf + (itemId - 1) * 12 + 2 + offset]
+                    if what == "x" or what == 1 then
+                        return x
+                    elseif what == "y" or what == 2 then
+                        return y
+                    elseif what == "xy" then
+                        return {x, y}
+                    end
+                end,
+                __newindex = function (_, what, val)
+                    u1[armorXYwasSet + itemId - 1] = 1
+                    local xoff, yoff = armorXYbuf + (itemId - 1) * 12 + offset, armorXYbuf + (itemId - 1) * 12 + 2 + offset
+                    if what == "x" or what == 1 then
+                        i2[xoff] = val
+                    elseif what == "y" or what == 2 then
+                        i2[yoff] = val
+                    elseif what == "xy" then
+                        i2[xoff], i2[yoff] = val[1], val[2]
+                    end
+                end
+            })
+        end
+        do
+            local accessorsCache = {}
+            setmetatable(paperdollArmorCoords, {
+                __index = function(self, itemId)
+                    local ret = accessorsCache[itemId]
+                    if not ret then
+                        ret = {Body = makeCoordsAccessor(itemId, 0), LeftArm = makeCoordsAccessor(itemId, 4), RightArm = makeCoordsAccessor(itemId, 8)}
+                        ret[1], ret[2], ret[3] = ret.Body, ret.LeftArm, ret.RightArm
+                        accessorsCache[itemId] = ret
+                    end
+                    -- rawset(self, itemId, ret) -- no rawset to make newindex work, use caching instead
+                    return ret
+                end,
+                __newindex = function(self, itemId, val)
+                    for i, arrName in ipairs{"Body", "LeftArm", "RightArm"} do
+                        local a = self[itemId][arrName]
+                        local innerVal = val[arrName] or val[i]
+                        for k, v in pairs(innerVal) do
+                            a[k] = v
+                        end
+                    end
+                end
+            })
+        end
+        evt.PaperdollArmorCoords = paperdollArmorCoords
+        --[[
+            example usage:
+            local goldenPlateId = 78
+            local coords = evt.PaperdollArmorCoords
+            local plate = coords[goldenPlateId]
+            local x, y = unpack(plate.Body.XY)
+            -- or:
+            ---- local x = plate.Body.X
+            ---- local y = plate.Body.Y
+            coords[goldenPlateId] = { -- this WOULDN'T work: "plate = {...}"
+                Body = {X = 50, Y = 30},
+                LeftArm = {x, Y = 30}
+                RightArm = {20, 20}
+            }
+            local coords2 = coords[72]
+            coords2.Body.XY = coords2.Body.X + 20, coords2.Body.Y + 50
+            coords2.RightArm[1] = 88 -- same as XX
+            coords2.LeftArm[2] = plate.Body.Y -- same as Y
+        ]]
 
         -- default coords for already existing images
         callWhenGameInitialized(function()
@@ -743,12 +795,17 @@ do
             for i, item in Game.ItemsTxt do
                 if (i < 66 or i > 78) and idsByPic[item.Picture:lower()] then
                     local index = idsByPic[item.Picture:lower()] - 66
-                    paperdollArmorXY[i] = {i2[0x4BCDF8 + index * 2], i2[0x4BCE14 + index * 2]}
+                    local off = index * 2
+
+                    paperdollArmorCoords[i] = {
+                        Body = {i2[0x4BCDF8 + off], i2[0x4BCE14 + off]},
+                        LeftArm = {i2[0x4BCE30 + off], i2[0x4BCE4C + off]},
+                        RightArm = {i2[0x4BCE68 + off], i2[0x4BCE84 + off]}
+                    }
                 end
             end
         end)
 
-        -- FIXME: set defaults
         -- TODO: better?
         --[[
             local x = armorCoords[5].X
@@ -760,6 +817,8 @@ do
 
         hooks.ref.armorXYbuf = armorXYbuf
         hooks.ref.armorXYwasSet = armorXYwasSet
+
+        -- armor coords
         hooks.asmhook(0x4125A9, [[
             push ecx
             mov edx, [ebp+0x1434] ; item armor
@@ -771,24 +830,77 @@ do
             test cl, cl
             pop ecx
             je @std
-            mov edi, [ebp+0x1434] ; item armor
-            lea edx, [edi * 8]
-            sub edx, edi
-            mov edi, [ebp+edx*4+0x128] ; item id
-            dec edi
-            movsx edx, word [%armorXYbuf% + edi * 4 + 2] ; Y
-            movsx edi, word [%armorXYbuf% + edi * 4] ; X
+            movsx edi, word [%armorXYbuf% + edx * 4] ; X
+            movsx edx, word [%armorXYbuf% + edx * 4 + 2] ; Y
             jmp absolute 0x4125B9
 
             @std:
         ]], 0x10)
 
-        -- belts
+        -- drawing armored arms
+
+        -- FIRST HAND --
+
+        -- always draw
+        asmpatch(0x412AE1, "jmp short 0x412AF8 - 0x412AE1")
+
+        -- armored arm bitmap id and XY coords
+        hooks.asmpatch(0x412B39, [[
+            ; bitmap id
+            push edx
+            add eax, 65 ; now has proper item id - 1
+            mov edi, [%armorXYbuf% + eax * 4 + 1] ; first hand bitmap
+
+            ; coords
+            mov dl, byte [%armorXYwasSet% + eax]
+            test dl, dl
+            jne @newCoords
+                sub eax, 65
+                movsx ecx,word ptr [eax*2+0x4BCE4C]
+                movsx eax,word ptr [eax*2+0x4BCE30]
+                jmp @exit
+            @newCoords:
+                movsx ecx,word ptr [eax*2+%armorXYfirstHand]
+                movsx eax,word ptr [eax*2+%armorXYsecondHand]
+            @exit:
+            pop edx
+        ]], 0x17)
+
+        hooks.asmhook(0x4127E6, [[
+            ; edi = item ptr
+            lea ecx,dword ptr [eax+eax*2]
+            mov edx, [edi]
+            mov dl, [%armorXYwasSet% + edx]
+            test dl, dl
+            je @std
+            mov edx, [edi]
+            ; edx - Y, eax - X
+            movsx eax, word [%armorXYbuf% + edx * 4] ; X
+            movsx edx, word [%armorXYbuf% + edx * 4 + 2] ; Y
+
+            ;; FIXME (bitmap id)
+            push ecx
+            mov eax, [ebp+0x1434] ; item armor
+            lea ecx, [eax * 8]
+            sub ecx, eax
+            mov eax, [ebp+ecx*4+0x128] ; item id
+            dec eax
+            lea eax, [eax * 4]
+            mov edi, [eax + eax * 2 + %armors%]
+            pop ecx
+            test cl, 2
+
+            jmp absolute 0x4127F9
+
+            @std:
+        ]], 0x13)
+
+        -- belts, correct bitmap id
         hooks.asmpatch(0x412918, [[
             mov ebx, [eax * 4 + %belts% - 4]
         ]], 0x7)
 
-        -- helmets
+        -- helmets, correct bitmap id
         hooks.asmpatch(0x412669, [[
             mov edi, [ecx * 4 + %helmets% - 4]
         ]], 0x19)
@@ -894,6 +1006,19 @@ do
                 @exit:
             ]], 0xC)
         end
+        
+        mem.hookfunction(0x44A6B0, 1, 0, function(d, def, itemPtr)
+            local item = structs.Item:new(itemPtr)
+            local t = {Item = item, Allow = true}
+            events.cocall("GenerateArtifact", t)
+            if t.Allow then
+                local r = def(itemPtr)
+                t.GenerationSuccessful = r
+                events.cocall("ArtifactGenerated", t)
+                return r
+            end
+            return 0 -- couldn't generate
+        end)
     end
 
     function setAlchemyHooks(itemCount)
