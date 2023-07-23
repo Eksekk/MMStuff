@@ -1019,7 +1019,7 @@ do
     end
 
     function setAlchemyHooks(itemCount)
-         -- potions
+        -- potions
 
         -- items that activate potion mixing code
         local isItemMixableBuf = StaticAlloc(itemCount)
@@ -1034,6 +1034,10 @@ do
         }.asmproc([[
             ; ecx - item id
             xor eax, eax
+            test ecx, ecx ; avoid bug if there is no item (id == 0)
+            jne @F
+            inc ecx
+            @@:
             mov al, [ecx + %buf% - 1]
             ret
         ]])
@@ -1049,6 +1053,10 @@ do
         }.asmproc([[
             ; ecx - item id
             xor eax, eax
+            test ecx, ecx
+            jne @F
+            inc ecx
+            @@:
             mov al, [ecx + %buf% - 1]
             ret
         ]])
@@ -1056,14 +1064,39 @@ do
         local isItemPotionBuf = StaticAlloc(itemCount)
         mem.fill(isItemPotionBuf, itemCount, 0)
         mem.fill(isItemPotionBuf + 163, 25, 1)
+        evt.IsItemPotion = makeMemoryTogglerTable{arr = u1, size = 1, buf = isItemPotionBuf, bool = true,
+            minIndex = 1, maxIndex = itemCount, errorFormat = "Invalid item id"}
         hooks.ref.isItemPotion = HookManager{
             buf = isItemPotionBuf
         }.asmproc([[
             ; ecx - item id
             xor eax, eax
+            test ecx, ecx
+            jne @F
+            inc ecx
+            @@:
             mov al, [ecx + %buf% - 1]
             ret
         ]])
+        
+        hooks.asmpatch(0x410B1C, [[
+            ; change weird empty potion bottles into common one (mouse item)
+            push eax
+            mov ecx, eax
+            call absolute %isItemPotionBottle%
+            test al, al
+            pop eax
+            je absolute 0x410B34
+        ]], 0xE)
+
+        hooks.asmpatch(0x410B4C, [[
+            ; like above, but for rightclicked item
+            push eax
+            call absolute %isItemPotionBottle%
+            test al, al
+            pop eax
+            je absolute 0x410B67
+        ]], 0x10)
 
         hooks.ref.mouseItem = Mouse.Item["?ptr"]
         hooks.asmpatch(0x410B67, [[
@@ -1083,19 +1116,13 @@ do
             mov eax, [%mouseItem%]
             mov ecx, [edi]
         ]], 0x3B)
-        
-        hooks.asmpatch(0x410B1C, [[
-            push eax
-            mov ecx, eax
-            call absolute %isItemPotion%
-            pop eax
-            test al, al
-            je absolute 0x410B34
-        ]], 0xE)
 
         autohook(0x410BA2, function(d)
-            local t = {ClickedPotion = structs.Item:new(d.edi), MousePotion = Mouse.Item, Player = GetPlayer(d.esi)}
+            local t = {ClickedPotion = structs.Item:new(d.edi), MousePotion = Mouse.Item, Player = GetPlayer(d.esi), Handled = false}
+            events.cocall("MixPotion", t)
+            if t.Handled then
 
+            end
         end)
     end
 end
