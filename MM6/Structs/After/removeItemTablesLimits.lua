@@ -26,6 +26,10 @@ local function GetPlayer(ptr)
     return Party[(ptr - Party[0]["?ptr"]) / Party[0]["?size"]]
 end
 
+local function checkIndex(t)
+
+end
+
 --[[
     REMOVE LIMITS WORKFLOW:
     1) generate table offsets data to facilitate finding references
@@ -653,19 +657,18 @@ do
             return base .. "bod", base .. "arm1", base .. "arm2"
         end
 
-        local beltIconIds, helmetIconIds, armorItemIds = StaticAlloc(itemCount * 4), StaticAlloc(itemCount * 4), StaticAlloc(itemCount * 4 * 3)
-        local armorCoordsByImage = {} -- needed for custom armor offsets
+        local beltBitmapIds, helmetBitmapIds, armorBitmapIds = StaticAlloc(itemCount * 4), StaticAlloc(itemCount * 4), StaticAlloc(itemCount * 4 * 3)
         local function process()
             for i, item in Game.ItemsTxt do
                 if item.EquipStat == const.ItemType.Armor - 1 then
                     local body, arm1, arm2 = getArmorPicsFromName(item.Picture)
-                    local baseOff = armorItemIds + (i - 1) * 12
+                    local baseOff = armorBitmapIds + (i - 1) * 12
                     u4[baseOff] = Game.IconsLod:LoadBitmap(body)
                     u4[baseOff + 4] = Game.IconsLod:LoadBitmap(arm1)
                     u4[baseOff + 8] = Game.IconsLod:LoadBitmap(arm2)
                 elseif item.EquipStat == const.ItemType.Belt - 1 then
                     local name = assert(item.Picture:match("(belt%d+)[abAB]")) .. "b"
-                    u4[beltIconIds + (i - 1) * 4] = Game.IconsLod:LoadBitmap(name)
+                    u4[beltBitmapIds + (i - 1) * 4] = Game.IconsLod:LoadBitmap(name)
                 elseif item.EquipStat == const.ItemType.Helm - 1 then
                     local id = item.Picture:match("he?lm(%d+)")
                     local name
@@ -679,32 +682,16 @@ do
                     if not name then
                         name = assert(item.Picture:match("(crown%d+)")) .. "b"
                     end
-                    u4[helmetIconIds + (i - 1) * 4] = Game.IconsLod:LoadBitmap(name)
+                    u4[helmetBitmapIds + (i - 1) * 4] = Game.IconsLod:LoadBitmap(name)
                 end
             end
         end
 
         callWhenGameInitialized(process)
 
-        local hooks = HookManager{belts = beltIconIds, helmets = helmetIconIds, armors = armorItemIds}
+        local hooks = HookManager{belts = beltBitmapIds, helmets = helmetBitmapIds, armors = armorBitmapIds}
 
         -- armors
-        -- correct bitmap id
-        hooks.asmpatch(0x4125C8, [[
-            push ecx
-            mov eax, [ebp+0x1434] ; item armor
-            lea ecx, [eax * 8]
-            sub ecx, eax
-            mov eax, [ebp+ecx*4+0x128] ; item id
-            dec eax
-            lea eax, [eax * 4]
-            mov edi, [eax + eax * 2 + %armors%]
-            pop ecx
-            test cl, 2
-        ]], 0xA)
-
-        -- show custom armors with indexes other than builtin ones
-        mem.nop(0x4125A7)
 
         -- checkIndex function for automatic erroring if index is invalid, with stack level to error on, increase by 1 inside
         local armorXYbuf = StaticAlloc(itemCount * 3 * 2 * 2) -- body and both arms
@@ -716,8 +703,8 @@ do
         local function makeCoordsAccessor(itemId, offset)
             return setmetatable({}, {
                 __index = function(_, what)
-                    what = what:lower()
-                    local x, y = i2[armorXYbuf + (itemId - 1) * 12 + offset], i2[armorXYbuf + (itemId - 1) * 12 + 2 + offset]
+                    what = type(what) == "string" and what:lower() or what
+                    local x, y = i2[armorXYbuf + (itemId - 1) * 12 + offset], i2[armorXYbuf + (itemId - 1) * 12 + offset + 2]
                     if what == "x" or what == 1 then
                         return x
                     elseif what == "y" or what == 2 then
@@ -727,8 +714,9 @@ do
                     end
                 end,
                 __newindex = function (_, what, val)
+                    what = type(what) == "string" and what:lower() or what
                     u1[armorXYwasSet + itemId - 1] = 1
-                    local xoff, yoff = armorXYbuf + (itemId - 1) * 12 + offset, armorXYbuf + (itemId - 1) * 12 + 2 + offset
+                    local xoff, yoff = armorXYbuf + (itemId - 1) * 12 + offset, armorXYbuf + (itemId - 1) * 12 + offset + 2
                     if what == "x" or what == 1 then
                         i2[xoff] = val
                     elseif what == "y" or what == 2 then
@@ -773,7 +761,7 @@ do
             -- or:
             ---- local x = plate.Body.X
             ---- local y = plate.Body.Y
-            coords[goldenPlateId] = { -- this WOULDN'T work: "plate = {...}"
+            coords[goldenPlateId] = { -- this WOULDN'T work: "plate = {...}", you need to assign key to table directly
                 Body = {X = 50, Y = 30},
                 LeftArm = {x, Y = 30}
                 RightArm = {20, 20}
@@ -793,7 +781,7 @@ do
             end
 
             for i, item in Game.ItemsTxt do
-                if (i < 66 or i > 78) and idsByPic[item.Picture:lower()] then
+                if idsByPic[item.Picture:lower()] then
                     local index = idsByPic[item.Picture:lower()] - 66
                     local off = index * 2
 
@@ -802,21 +790,36 @@ do
                         LeftArm = {i2[0x4BCE30 + off], i2[0x4BCE4C + off]},
                         RightArm = {i2[0x4BCE68 + off], i2[0x4BCE84 + off]}
                     }
+
+                    -- fill in default coords from memory for easy modification, but don't use them by default
+                    if i >= 66 and i <= 78 then
+                        paperdollArmorCoords.ClearCustomCoords(i)
+                    end
                 end
             end
         end)
 
-        -- TODO: better?
-        --[[
-            local x = armorCoords[5].X
-            armorCoords[5].XY = {3, 4}
-            local a = armorCoords[2]
-            local x, y = a.XY
-            a.X, a.Y = x + 5, y + 10
-        ]]
-
         hooks.ref.armorXYbuf = armorXYbuf
         hooks.ref.armorXYwasSet = armorXYwasSet
+
+        -- armors
+
+        -- correct bitmap id
+        hooks.asmpatch(0x4125C8, [[
+            push ecx
+            mov eax, [ebp+0x1434] ; item armor
+            lea ecx, [eax * 8]
+            sub ecx, eax
+            mov eax, [ebp+ecx*4+0x128] ; item id
+            dec eax
+            lea eax, [eax + eax * 2]
+            mov edi, [eax * 4 + %armors%]
+            pop ecx
+            test cl, 2
+        ]], 0xA)
+
+        -- show custom armors with indexes other than builtin ones
+        mem.nop(0x4125A7)
 
         -- armor coords
         hooks.asmhook(0x4125A9, [[
@@ -830,6 +833,7 @@ do
             test cl, cl
             pop ecx
             je @std
+            lea edx, [edx + edx * 2]
             movsx edi, word [%armorXYbuf% + edx * 4] ; X
             movsx edx, word [%armorXYbuf% + edx * 4 + 2] ; Y
             jmp absolute 0x4125B9
@@ -839,61 +843,54 @@ do
 
         -- drawing armored arms
 
-        -- FIRST HAND --
-
-        -- always draw
-        asmpatch(0x412AE1, "jmp short 0x412AF8 - 0x412AE1")
-
-        -- armored arm bitmap id and XY coords
-        hooks.asmpatch(0x412B39, [[
+        local patch = [[
             ; bitmap id
             push edx
             add eax, 65 ; now has proper item id - 1
-            mov edi, [%armorXYbuf% + eax * 4 + 1] ; first hand bitmap
+            lea edx, [eax + eax * 2]
+            mov edi, [%armors% + edx * 4 + %bmpOff%] ; bitmap id
 
             ; coords
             mov dl, byte [%armorXYwasSet% + eax]
             test dl, dl
             jne @newCoords
                 sub eax, 65
-                movsx ecx,word ptr [eax*2+0x4BCE4C]
-                movsx eax,word ptr [eax*2+0x4BCE30]
+                movsx ecx,word ptr [eax*2+%defaultXoff%]
+                movsx eax,word ptr [eax*2+%defaultYoff%]
                 jmp @exit
             @newCoords:
-                movsx ecx,word ptr [eax*2+%armorXYfirstHand]
-                movsx eax,word ptr [eax*2+%armorXYsecondHand]
+                lea eax, [eax + eax * 2]
+                movsx ecx,word ptr [eax*4+%armorXYbuf% + %coordsOffY%] ; Y
+                movsx eax,word ptr [eax*4+%armorXYbuf% + %coordsOffX%] ; X
             @exit:
             pop edx
-        ]], 0x17)
+        ]]
 
-        hooks.asmhook(0x4127E6, [[
-            ; edi = item ptr
-            lea ecx,dword ptr [eax+eax*2]
-            mov edx, [edi]
-            mov dl, [%armorXYwasSet% + edx]
-            test dl, dl
-            je @std
-            mov edx, [edi]
-            ; edx - Y, eax - X
-            movsx eax, word [%armorXYbuf% + edx * 4] ; X
-            movsx edx, word [%armorXYbuf% + edx * 4 + 2] ; Y
+        -- left arm
 
-            ;; FIXME (bitmap id)
-            push ecx
-            mov eax, [ebp+0x1434] ; item armor
-            lea ecx, [eax * 8]
-            sub ecx, eax
-            mov eax, [ebp+ecx*4+0x128] ; item id
-            dec eax
-            lea eax, [eax * 4]
-            mov edi, [eax + eax * 2 + %armors%]
-            pop ecx
-            test cl, 2
+        -- always draw
+        asmpatch(0x412AE1, "test dword [ebp+0x1434], 0xFFFFFFFF", 0x11)
 
-            jmp absolute 0x4127F9
+        -- armored arm bitmap id and XY coords
+        table.copy({
+            defaultXoff = 0x4BCE4C,
+            defaultYoff = 0x4BCE30,
+            coordsOffX = 4,
+            coordsOffY = 6,
+            bmpOff = 4,
+        }, hooks.ref, true)
+        hooks.asmpatch(0x412B39, patch, 0x17)
 
-            @std:
-        ]], 0x13)
+        -- right arm
+
+        table.copy({
+            defaultXoff = 0x4BCE68,
+            defaultYoff = 0x4BCE84,
+            coordsOffX = 8,
+            coordsOffY = 10,
+            bmpOff = 8,
+        }, hooks.ref, true)
+        hooks.asmpatch(0x412B76, patch, 0x17)
 
         -- belts, correct bitmap id
         hooks.asmpatch(0x412918, [[
