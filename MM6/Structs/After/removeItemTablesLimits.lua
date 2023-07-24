@@ -1272,19 +1272,19 @@ do
         ]])
 
         -- don't show bonus name in item name for potions (I use this field for power)
-        -- done with asmhook below
+        -- DONE WITH ASMHOOK BELOW
         -- function events.GetItemName(t)
         --     if t.Item:T().EquipStat == const.ItemType.Potion - 1 then
         --         t.Name = t.Item:T().Name
         --     end
         -- end
 
-        -- don't crash in item name function for potions
+        -- don't crash in item name function for potions ("bonus" index out of range)
         hooks.asmhook(0x4486CE, [[
             ; ebx - item pointer
             mov ecx, [ebx]
             call absolute %isItemPotion%
-            setne dl
+            mov dl, al
             mov ecx, [ebx]
             call absolute %isItemPotionBottle%
             or dl, al
@@ -1293,6 +1293,26 @@ do
                 jmp absolute 0x448714
             @std:
         ]], 0x8)
+
+        -- DRINK POTION
+        autohook(0x459103, function(d) -- overwrite mm6patch hook if custom effect is added
+            local t = {Player = GetPlayer(d.esi), Potion = Mouse.Item, Handled = false, CannotDrink = false}
+            function t.MakeFaceAnimation()
+                t.Player:ShowFaceAnimation(const.FaceAnimation.DinkPotion)
+            end
+            events.cocall("DrinkPotion", t)
+            -- either: run vanilla code, run custom code or prohibit drinking
+            -- CannotDrink == true: message "item cannot be used that way"
+            -- Handled == true: don't run vanilla potion logic, but make drink sound, add recovery and remove mouse item
+            -- Handled == false: full vanilla code runs
+            if t.CannotDrink then
+                d:push(0x459EB8)
+                return true
+            elseif t.Handled then
+                d:push(0x459977)
+                return true
+            end
+        end)
     end
 end
 
