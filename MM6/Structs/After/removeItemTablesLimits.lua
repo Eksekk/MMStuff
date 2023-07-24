@@ -26,8 +26,10 @@ local function GetPlayer(ptr)
     return Party[(ptr - Party[0]["?ptr"]) / Party[0]["?size"]]
 end
 
-local function checkIndex(t)
-
+local function checkIndex(index, minIndex, maxIndex, level)
+    if index < minIndex or index > maxIndex then
+        error(format("Index %d out of bounds [%d, %d]", index, minIndex, maxIndex), level + 1)
+    end
 end
 
 --[[
@@ -361,7 +363,7 @@ do
     -- ITEM DATA MEMORY LAYOUT:
     -- items.txt size, items.txt, stditems.txt, spcitems.txt, 0x3918 placeholder bytes, potions.txt, 3 empty bytes, data pointers (items.txt, rnditems.txt, stditems.txt, spcitems.txt), 4 zero bytes
     -- [0] sum of all item chances for each of 6 treasure levels from rnditems.txt (0x56AADC, 6 dwords)
-    -- [0x9] bonus chance by level from rnditems.txt (dword, level 1-6): standard, special, special% : 0x56AAF4, 18 dwords
+    -- [0x18] bonus chance by level from rnditems.txt (dword, level 1-6): standard, special, special% : 0x56AAF4, 18 dwords
     -- [0x60] std item bonus chances (column sums) : 0x56AB3C, 9 dwords
     -- [0x84] std bonus strength ranges: [min, max] for each treasure level: 0x56AB60, 12 dwords
     -- spc item bonus chances (column sums): 0x56AB90, 12 dwords
@@ -429,6 +431,7 @@ do
         local itemCount, stdItemCount, spcItemCount = DataTables.ComputeRowCountInPChar(u4[itemsTxtDataPtr], 0, 1) - 3 + 1, -- 0th item also counts
             DataTables.ComputeRowCountInPChar(u4[stdItemsTxtDataPtr], 1, 1) - 4, DataTables.ComputeRowCountInPChar(u4[spcItemsTxtDataPtr], 1, 2) - 11
         local potionTxtCount = DataTables.ComputeRowCountInPChar(u4[useItemsTxtDataPtr], 0, 2) - 9 -- the file for this is useItems.txt
+        -- TODO: potion txt offset computation uses hardcoded 29 value, it might have not been replaced
 
         local origItemDataOffset = Game.ItemsTxt["?ptr"] - 4 -- -4 for size field
 
@@ -546,9 +549,8 @@ do
         asmpatch(0x449ADE, "mov eax, " .. u4[stdItemsTxtDataPtr], 0x1B)
         asmpatch(0x449D22, "mov eax, " .. u4[spcItemsTxtDataPtr], 0x1B)
 
-        hooks.ref.lastRndItemsIndex = StaticAlloc(4)
-
         -- don't require rnditems.txt to have filled data for all items
+        hooks.ref.itemCount = itemCount
         hooks.asmpatch(0x4497F9, [[
             ; if there is more data, next character is newline and then a digit
             mov al, [esi + 1]
@@ -556,10 +558,10 @@ do
             jb @done
             cmp al, '9'
             ja @done
-            ; TODO: at most [item count] rows
+            cmp edi, %itemCount%
+            jae @done
             jmp @exit
             @done:
-                mov [%lastRndItemsIndex%], edi
                 jmp absolute 0x449805
             @exit:
                 jmp absolute 0x4496F7
@@ -595,7 +597,6 @@ do
             hooks.asmhook2(0x448E5C, [[
                 mov eax, %itemBuf%
             ]])
-            -- TODO: CHECK
             -- TODO: change all to asmpatches to have no useless instructions? (low priority)
         end
 
@@ -936,6 +937,43 @@ do
     end
 
     function setMiscItemHooks(itemCount, enchantmentDataOffset)
+        --[[
+            -- [0] sum of all item chances for each of 6 treasure levels from rnditems.txt (0x56AADC, 6 dwords)
+            -- [0x18] bonus chance by level from rnditems.txt (dword, level 1-6): standard, special, special% : 0x56AAF4, 18 dwords
+            -- [0x60] std item bonus chances (column sums) : 0x56AB3C, 9 dwords
+            -- [0x84] std bonus strength ranges: [min, max] for each treasure level: 0x56AB60, 12 dwords
+            -- spc item bonus chances (column sums): 0x56AB90, 12 dwords
+        ]]
+
+        evt.RndItemsChanceSums = makeMemoryTogglerTable{arr = u4, size = 4, buf = enchantmentDataOffset,
+            minIndex = 1, maxIndex = 6, errorFormat = "Valid indexes are from %d to %d"}
+
+        do
+            local sums = enchantmentDataOffset + 0x18
+            local function getOffset(key)
+                local offsets = {["Standard"] = 0, ["Special"] = 6 * 4, ["SpecialPercentage"] = 6 * 4 * 2}
+                local off = sums + (offsets[key] or error(format("Invalid index %q", key), 3))
+            end
+            evt.RndItemsBonusChanceByLevel = setmetatable({}, {
+                __index = function(t, i)
+                    checkIndex(i, 1, 6, 2)
+                    local tab = setmetatable({}, {
+                        __index = function(self, key)
+                            return u4[sums + getOffset(key) + i * 4]
+                        end,
+                        __newindex = function(self, key, val)
+                            u4[sums + getOffset(key) + i * 4] = assertnum(val, 2)
+                        end
+                    })
+                    rawset(t, i, tab)
+                    return tab
+                end
+            })
+        end
+
+        evt.StdBonusChanceSums = makeMemoryTogglerTable{arr = u4, size = 4, buf = enchantmentDataOffset + 0x60,
+            minIndex = 1, maxIndex = 6, "Valid indexes are from %d to %d"}
+
         local enchOffset = 0x84
         evt.StdBonusStrengthRanges = setmetatable({}, {__index = function(t, i)
             assert(i >= 1 and i <= 6, "Invalid treasure level")
@@ -957,19 +995,10 @@ do
             t[i][0] = val[1]
             t[i][1] = val[2]
         end})
-        --[[
-            -- [0] sum of all item chances for each of 6 treasure levels from rnditems.txt (0x56AADC, 6 dwords)
-            -- [0x9] bonus chance by level from rnditems.txt (dword, level 1-6): standard, special, special% : 0x56AAF4, 18 dwords
-            -- [0x60] std item bonus chances (column sums) : 0x56AB3C, 9 dwords
-            -- [0x84] std bonus strength ranges: [min, max] for each treasure level: 0x56AB60, 12 dwords
-            -- spc item bonus chances (column sums): 0x56AB90, 12 dwords
-        ]]
-
-        evt.RndItemsChanceSums = makeMemoryTogglerTable{arr = u4, size = 4, buf = enchantmentDataOffset,
-            minIndex = 1, maxIndex = 6, errorFormat = "Valid indexes are from %d to %d"}
+        
         -- TODO: MORE
 
-        -- can item be generated, TODO: patch all instance3s
+        -- can item be generated, TODO: patch all instances
         do
             local buf = StaticAlloc(itemCount)
             mem.fill(buf, 400, 1) -- normal items
@@ -1173,7 +1202,7 @@ do
         local customMixResult, newPotionId, newPower = potionBuf, potionBuf + 1, potionBuf + 5
         autohook(0x410BA2, function(d)
             local clicked, mouse = structs.Item:new(d.edi), Mouse.Item
-            -- set result to false to restrict mixing, 0 lets vanilla code select new potion
+            -- set result to false to restrict mixing, 0 lets vanilla code select new potion (will probably crash for nonstandard ones)
             local t = {ClickedPotion = clicked, MousePotion = mouse, Player = GetPlayer(d.esi), Handled = false, Result = 0, ResultPower = 0, Explosion = false}
             t.ClickedPower, t.MousePower = t.ClickedPotion.Bonus, t.MousePotion.Bonus
             function t.CheckCombination(a, b) -- returns true if two provided ids are ids of any potion participating in mixing
@@ -1185,7 +1214,7 @@ do
                 d:push(0x411028)
                 return true
             elseif t.Explosion then
-                assert(t.Explosion <= 4, "Explosion power must be at most 4")
+                assert(t.Explosion >= 1 and t.Explosion <= 4, "Explosion power must be in [1, 4] range")
                 d.ebx = t.Explosion
                 u1[customMixResult] = 1
                 d:push(0x410BB6)
@@ -1203,6 +1232,21 @@ do
                 return true
             end
         end)
+
+        table.copy({customMixResult = customMixResult, newPotionId = newPotionId, newPower = newPower}, hooks.ref, true)
+
+        -- apply data from above event to potion
+        hooks.asmhook2(0x410FD3, [[
+            mov al, [%customMixResult%]
+            and byte [%customMixResult%], 0
+            test al, al
+            je @exit
+            mov eax, [%newPotionId%]
+            mov [edi], eax
+            mov eax, [%newPower%]
+            mov [edi + 4], eax
+            @exit:
+        ]], 0xA)
 
         -- tests
         do
@@ -1236,24 +1280,13 @@ do
             end
         end
 
-        table.copy({customMixResult = customMixResult, newPotionId = newPotionId, newPower = newPower}, hooks.ref, true)
-
-        hooks.asmhook2(0x410FD3, [[
-            mov al, [%customMixResult%]
-            and byte [%customMixResult%], 0
-            test al, al
-            je @exit
-            mov eax, [%newPotionId%]
-            mov [edi], eax
-            mov eax, [%newPower%]
-            mov [edi + 4], eax
-            @exit:
-        ]], 0xA)
-
         table.copy({sprintf = 0x4AE273, formatText = mem.topointer("Power: %lu"), screenAddText = 0x442E90}, hooks.ref, true)
 
         -- show power in tooltip
         hooks.asmhook(0x41CB20, [[
+            ; sprintf to get text
+            ; put it where bonus text is put on stack (if first byte is not 0, it will be printed automatically)
+            ; ecx = items txt entry ptr, ebx = item ptr
             cmp byte [ecx + 0x14], 0xE ; potion bottle
             jne @std
             mov eax, [ebx + 4] ; bonus (power)
@@ -1266,8 +1299,6 @@ do
             call absolute %sprintf%
             add esp, 0xC
             jmp absolute 0x41CB54
-            ; sprintf to get text
-            ; put it where bonus text is put on stack (if first byte is not 0, it will be printed automatically)
             @std:
         ]])
 
