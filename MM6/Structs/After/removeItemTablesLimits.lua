@@ -134,7 +134,7 @@ function processRawAddresses(arrayName)
                     error(format("Address 0x%X has two valid references to array", addr))
                 end
                 cmdSize = i
-                hasFreeBytes = (addr + i + 4 ~= len)
+                hasFreeBytes = (i + 4 ~= len)
             end
         end
         if not cmdSize then
@@ -1016,6 +1016,57 @@ do
             end
             return 0 -- couldn't generate
         end)
+
+        -- ITEM NAME HOOK --
+        -- there are two variations, one is for any item, second for only identified items. First one jumps to second if item is identified
+        -- any item variant requires asmpatch to hookfunction it, because it has short jump
+        -- since both variations are called by game code, I need two hooks here
+        -- however, I opted for using hook manager to disable second hook if first is entered and reenable after finishing, to avoid unnecessary double hook
+        -- so "identified items only" hook is called only if game calls precisely this address, and not "any item" address
+
+        addr = asmpatch(0x448660, [[
+            test byte ptr [ecx+0x14],1
+            je absolute 0x44866B
+        ]], 0x6)
+
+        local function getOwnBufferHookFunction(identified)
+            local itemNameBuf, itemNameBufLen
+            return function(d, def, itemPtr)
+                local defNamePtr = def(itemPtr)
+                -- identified name only means that function should only set full item names, if it's false, when item is not identified, for example only "Chain Mail" may be set
+                local t = {Item = structs.Item:new(d.ecx), Name = mem.string(defNamePtr), IdentifiedNameOnly = identified}
+                local prevName = t.Name
+                events.call("GetItemName", t)
+                if t.Name ~= prevName then
+                    local len = t.Name:len()
+                    if len <= 0x63 then
+                        mem.copy(0x56B708, t.Name .. string.char(0))
+                    else
+                        if not itemNameBuf or itemNameBufLen < len + 1 then
+                            if itemNameBuf then
+                                mem.free(itemNameBuf)
+                            end
+                            itemNameBufLen = len + 1
+                            itemNameBuf = mem.malloc(itemNameBufLen)
+                        end
+                        mem.copy(itemNameBuf, t.Name .. string.char(0))
+                        return itemNameBuf
+                    end
+                end
+                return defNamePtr
+            end
+        end
+
+        local identifiedItemNameHooks = HookManager()
+        identifiedItemNameHooks.hookfunction(0x448680, 1, 0, getOwnBufferHookFunction(false))
+
+        local secondHookFunc = getOwnBufferHookFunction(true)
+        mem.hookfunction(addr, 1, 0, function(d, def, itemPtr)
+            identifiedItemNameHooks.Switch(false)
+            local r = secondHookFunc(d, def, itemPtr)
+            identifiedItemNameHooks.Switch(true)
+            return r
+        end)
     end
 
     function setAlchemyHooks(itemCount)
@@ -1117,13 +1168,131 @@ do
             mov ecx, [edi]
         ]], 0x3B)
 
+        local potionBuf = StaticAlloc(9)
+        -- potion id might not be needed (vanilla code sets it), but let's keep it just in case
+        local customMixResult, newPotionId, newPower = potionBuf, potionBuf + 1, potionBuf + 5
         autohook(0x410BA2, function(d)
-            local t = {ClickedPotion = structs.Item:new(d.edi), MousePotion = Mouse.Item, Player = GetPlayer(d.esi), Handled = false}
+            local clicked, mouse = structs.Item:new(d.edi), Mouse.Item
+            -- set result to false to restrict mixing, 0 lets vanilla code select new potion
+            local t = {ClickedPotion = clicked, MousePotion = mouse, Player = GetPlayer(d.esi), Handled = false, Result = 0, ResultPower = 0, Explosion = false}
+            t.ClickedPower, t.MousePower = t.ClickedPotion.Bonus, t.MousePotion.Bonus
+            function t.CheckCombination(a, b) -- returns true if two provided ids are ids of any potion participating in mixing
+                return clicked.Number == a and mouse.Number == b or clicked.Number == b and mouse.Number == a
+            end
             events.cocall("MixPotion", t)
+            u1[customMixResult] = 0
             if t.Handled then
-
+                d:push(0x411028)
+                return true
+            elseif t.Explosion then
+                assert(t.Explosion <= 4, "Explosion power must be at most 4")
+                d.ebx = t.Explosion
+                u1[customMixResult] = 1
+                d:push(0x410BB6)
+                return true
+            elseif t.Result and t.Result ~= 0 then
+                u1[customMixResult] = 1
+                u4[newPotionId] = t.Result
+                d.ebx = t.Result
+                u4[newPower] = t.ResultPower or 0
+                d:push(0x410BB6)
+                return true
+            elseif not t.Result then -- cannot mix
+                d.ebx = 0
+                d:push(0x410BB6)
+                return true
             end
         end)
+
+        -- tests
+        do
+            local superResistance, magicPotion, divinePower, protection, curePoison, resistance = 173, 165, 178, 167, 169, 168
+            --[[
+                local pots = {173, 165, 178, 167, 169, 168}
+                for i, pot in ipairs(pots) do
+                    for j = 1, 5 do
+                        evt.GiveItem{Id = pot}
+                    end
+                end
+            ]]
+            function events.MixPotion(t)
+                local idMouse, idClicked = t.MousePotion.Number, t.ClickedPotion.Number
+                if idMouse == superResistance then
+                    t.Result = magicPotion
+                    t.ResultPower = random(5, 24)
+                elseif idMouse == magicPotion and idClicked == magicPotion then
+                    t.Result = divinePower
+                    t.ResultPower = random(100, 200)
+                elseif t.CheckCombination(protection, curePoison) then
+                    t.Result = math.random(2) == 1 and divinePower or resistance
+                    t.ResultPower = 0
+                elseif t.CheckCombination(magicPotion, protection) then
+                    t.Explosion = 4
+                elseif t.CheckCombination(curePoison, magicPotion) then
+                    t.Result = false -- cannot mix
+                elseif t.CheckCombination(curePoison, curePoison) then
+                    t.Handled = true -- do nothing at all
+                end
+            end
+        end
+
+        table.copy({customMixResult = customMixResult, newPotionId = newPotionId, newPower = newPower}, hooks.ref, true)
+
+        hooks.asmhook2(0x410FD3, [[
+            mov al, [%customMixResult%]
+            and byte [%customMixResult%], 0
+            test al, al
+            je @exit
+            mov eax, [%newPotionId%]
+            mov [edi], eax
+            mov eax, [%newPower%]
+            mov [edi + 4], eax
+            @exit:
+        ]], 0xA)
+
+        table.copy({sprintf = 0x4AE273, formatText = mem.topointer("Power: %lu"), screenAddText = 0x442E90}, hooks.ref, true)
+
+        -- show power in tooltip
+        hooks.asmhook(0x41CB20, [[
+            cmp byte [ecx + 0x14], 0xE ; potion bottle
+            jne @std
+            mov eax, [ebx + 4] ; bonus (power)
+            test eax, eax
+            je @std
+            lea ecx, [esp+0x114]
+            push eax
+            push %formatText%
+            push ecx
+            call absolute %sprintf%
+            add esp, 0xC
+            jmp absolute 0x41CB54
+            ; sprintf to get text
+            ; put it where bonus text is put on stack (if first byte is not 0, it will be printed automatically)
+            @std:
+        ]])
+
+        -- don't show bonus name in item name for potions (I use this field for power)
+        -- done with asmhook below
+        -- function events.GetItemName(t)
+        --     if t.Item:T().EquipStat == const.ItemType.Potion - 1 then
+        --         t.Name = t.Item:T().Name
+        --     end
+        -- end
+
+        -- don't crash in item name function for potions
+        hooks.asmhook(0x4486CE, [[
+            ; ebx - item pointer
+            mov ecx, [ebx]
+            call absolute %isItemPotion%
+            setne dl
+            mov ecx, [ebx]
+            call absolute %isItemPotionBottle%
+            or dl, al
+            je @std
+                add esp, 0xC
+                jmp absolute 0x448714
+            @std:
+        ]], 0x8)
     end
 end
 
