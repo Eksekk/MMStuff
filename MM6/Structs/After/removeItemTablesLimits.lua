@@ -31,6 +31,34 @@ local function checkIndex(index, minIndex, maxIndex, level)
         error(format("Index %d out of bounds [%d, %d]", index, minIndex, maxIndex), level + 1)
     end
 end
+    
+local function makeMemoryTogglerTable(t)
+    local arr, buf, minIndex, maxIndex = t.arr, t.buf, t.minIndex, t.maxIndex
+    local bool, errorFormat, size = t.bool or true, t.errorFormat, t.size
+    local mt = {__index = function(_, i)
+        if i < minIndex or i > maxIndex then
+            error(format(errorFormat, minIndex, maxIndex), 2)
+        end
+        local off = buf + (i - minIndex) * size
+        if bool then
+            return arr[off] ~= 0
+        else
+            return arr[off]
+        end
+    end,
+    __newindex = function (_, i, val)
+        if i < minIndex or i > maxIndex then
+            error(format(errorFormat, minIndex, maxIndex), 2)
+        end
+        local off = buf + (i - minIndex) * size
+        if bool then
+            arr[off] = val and 1 or 0
+        else
+            arr[off] = val
+        end
+    end}
+    return setmetatable({}, mt)
+end
 
 --[[
     REMOVE LIMITS WORKFLOW:
@@ -320,7 +348,7 @@ do
         },
         limit = {
             [1] = {0x449852, 0x40FEC3, 0x448968, 0x448CDA},
-            [2] = {0x44966C, 0x449678--[[, 0x449805]], 0x44A6F4}
+            [2] = {0x44966C, 0x449678, 0x449805, 0x44A6F4}
         }
     }
 
@@ -430,12 +458,30 @@ do
     hook(mem.findcode(addr, NOP), function(d)
         local itemCount, stdItemCount, spcItemCount = DataTables.ComputeRowCountInPChar(u4[itemsTxtDataPtr], 0, 1) - 3 + 1, -- 0th item also counts
             DataTables.ComputeRowCountInPChar(u4[stdItemsTxtDataPtr], 1, 1) - 4, DataTables.ComputeRowCountInPChar(u4[spcItemsTxtDataPtr], 1, 2) - 11
-        local potionTxtCount = DataTables.ComputeRowCountInPChar(u4[useItemsTxtDataPtr], 0, 2) - 9 -- the file for this is useItems.txt
+        -- local potionTxtCount = DataTables.ComputeRowCountInPChar(u4[useItemsTxtDataPtr], 0, 2) - 9 -- the file for this is useItems.txt
+        local potionTxtCount = itemCount -- my change
         -- TODO: potion txt offset computation uses hardcoded 29 value, it might have not been replaced
+        local potionTxtCols, potionTxtColIds = 0, {}
+        do
+            local t = mem.string(u4[useItemsTxtDataPtr]):split("\r\n")
+            local c
+            for i = 9, #t do
+                _, c = t[i]:gsub("\t", "\t")
+                potionTxtCols = max(potionTxtCols, c)
+            end
+            local ids = t[9]:split("\t")
+            for i = 7, #ids do
+                potionTxtColIds[i - 6] = tonumber(ids[i])
+            end
+        end
+        local potionTxtColIdMap = StaticAlloc(potionTxtCols * 4)
+        for i, v in ipairs(potionTxtColIds) do
+            u4[potionTxtColIdMap + (i - 1) * 4] = v
+        end
 
         local origItemDataOffset = Game.ItemsTxt["?ptr"] - 4 -- -4 for size field
 
-        local itemsSize, stdItemsSize, spcItemsSize, potionTxtSize = itemCount * Game.ItemsTxt.ItemSize, stdItemCount * Game.StdItemsTxt.ItemSize, spcItemCount * Game.SpcItemsTxt.ItemSize, potionTxtCount * potionTxtCount
+        local itemsSize, stdItemsSize, spcItemsSize, potionTxtSize = itemCount * Game.ItemsTxt.ItemSize, stdItemCount * Game.StdItemsTxt.ItemSize, spcItemCount * Game.SpcItemsTxt.ItemSize, potionTxtCount * potionTxtCount * 2
         local newSpace = StaticAlloc(itemsSize + stdItemsSize + spcItemsSize + potionTxtSize + 0x3A40)
         u4[newSpace] = itemCount -- Game.ItemsTxt lenP
         local itemsOffset = newSpace + 4
@@ -524,7 +570,69 @@ do
         processReferencesTable("ItemsTxt", itemsOffset, itemCount, itemsTxtRefs, newSpace)
         processReferencesTable("StdItemsTxt", stdItemsOffset, stdItemCount, stdItemsTxtRefs)
         processReferencesTable("SpcItemsTxt", spcItemsOffset, spcItemCount, spcItemsTxtRefs)
+
+        -- "no" is converted to int as 0 (not mixable)
+        -- "E4" = explosion, power 4
         processReferencesTable("PotionTxt", potionTxtOffset, potionTxtCount, potionTxtRefs)
+        -- fortunately upvalues are shared, so no loop is needed
+        internal.SetArrayUpval(Game.PotionTxt[Game.PotionTxt.Low], "low", 1)
+        internal.SetArrayUpval(Game.PotionTxt, "low", 1)
+        internal.SetArrayUpval(Game.PotionTxt[Game.PotionTxt.Low], "count", itemCount)
+        -- TODO: upvalue "f" change from u1 to u2, the least hackish way possible
+
+        local potionTxtHooks = HookManager{
+            count = itemCount, potionTxt = potionTxtOffset, stringToInt = 0x4AEF19, potionTxtCols = potionTxtCols, potionTxtColIdMap = potionTxtColIdMap
+        }
+        -- CHANGE TO USE WORD
+        -- also use dynamic column-itemId map (and support missing columns)
+        potionTxtHooks.asmpatch(0x446641, [[
+            lea ecx, [ebx - 6]
+            mov ecx, [%potionTxtColIdMap% + ecx * 4]
+            dec ecx
+            mov [ecx*2+ebp],ax
+            test ax,ax
+        ]])
+        potionTxtHooks.asmpatch(0x446666, [[
+            lea ecx, [ebx - 6]
+            mov ecx, [%potionTxtColIdMap% + ecx * 4]
+            dec ecx
+            mov [ecx*2+ebp],ax
+            jmp absolute 0x446673
+        ]])
+
+        -- calc potion txt offset
+        HookManager{
+            count = potionTxtCount
+        }.asmpatch(0x410BA9, [[
+            ; ecx = rightclicked id, eax = mouse item
+            ud2 ; todo
+        ]])
+
+        potionTxtHooks.asmpatch(0x44662E, [[
+            ; get current index from first column
+            test ebx, ebx
+            jne @std
+                push esi
+                call absolute %stringToInt%
+                add esp, 4
+                mov ebp, eax
+                dec ebp
+                imul ebp, %count% * 2
+                add ebp, %potionTxt%
+            @std:
+            cmp ebx, 6
+            jl absolute 0x446673
+        ]])
+        mem.nop(0x446690) -- don't increase ebp (address to which data is written) by column count
+
+        -- no column limit
+        --[=[
+        mem.nop(0x446636)
+        mem.nop(0x44667E)
+        asmpatch(0x446633, [[
+
+        ]])
+        ]=]
 
         -- update mmextension hardcoded address
         do
@@ -908,33 +1016,6 @@ do
         -- value % Screen.Width (640) is y offset from top, value:div(Screen.Width) is x offset from left
         -- 0x4CA888 weakest chain armor scanline offset
     end
-    
-    local function makeMemoryTogglerTable(t)
-        local arr, buf, minIndex, maxIndex = t.arr, t.buf, t.minIndex, t.maxIndex
-        local bool, errorFormat, size = t.bool or true, t.errorFormat, t.size
-        local mt = {__index = function(_, i)
-            if i < minIndex or i > maxIndex then
-                error(format(errorFormat, minIndex, maxIndex), 2)
-            end
-            local off = buf + (i - minIndex) * size
-            if bool then
-                return arr[off] ~= 0
-            else
-                return arr[off]
-            end
-        end, __newindex = function (_, i, val)
-            if i < minIndex or i > maxIndex then
-                error(format(errorFormat, minIndex, maxIndex), 2)
-            end
-            local off = buf + (i - minIndex) * size
-            if bool then
-                arr[off] = val and 1 or 0
-            else
-                arr[off] = val
-            end
-        end}
-        return setmetatable({}, mt)
-    end
 
     function setMiscItemHooks(itemCount, enchantmentDataOffset)
         --[[
@@ -1200,7 +1281,7 @@ do
         local potionBuf = StaticAlloc(9)
         -- potion id might not be needed (vanilla code sets it), but let's keep it just in case
         local customMixResult, newPotionId, newPower = potionBuf, potionBuf + 1, potionBuf + 5
-        autohook(0x410BA2, function(d)
+        hook(0x410BA2, function(d)
             local clicked, mouse = structs.Item:new(d.edi), Mouse.Item
             -- set result to false to restrict mixing, 0 lets vanilla code select new potion (will probably crash for nonstandard ones)
             local t = {ClickedPotion = clicked, MousePotion = mouse, Player = GetPlayer(d.esi), Handled = false, Result = 0, ResultPower = 0, Explosion = false}
@@ -1211,25 +1292,21 @@ do
             events.cocall("MixPotion", t)
             u1[customMixResult] = 0
             if t.Handled then
-                d:push(0x411028)
-                return true
+                u4[d.esp] = 0x411028
             elseif t.Explosion then
                 assert(t.Explosion >= 1 and t.Explosion <= 4, "Explosion power must be in [1, 4] range")
                 d.ebx = t.Explosion
                 u1[customMixResult] = 1
-                d:push(0x410BB6)
-                return true
+                u4[d.esp] = 0x410BB6
             elseif t.Result and t.Result ~= 0 then
                 u1[customMixResult] = 1
                 u4[newPotionId] = t.Result
                 d.ebx = t.Result
                 u4[newPower] = t.ResultPower or 0
-                d:push(0x410BB6)
-                return true
+                u4[d.esp] = 0x410BB6
             elseif not t.Result then -- cannot mix
                 d.ebx = 0
-                d:push(0x410BB6)
-                return true
+                u4[d.esp] = 0x410BB6
             end
         end)
 
