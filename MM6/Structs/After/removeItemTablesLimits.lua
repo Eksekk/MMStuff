@@ -13,6 +13,8 @@ end
 
 if mmver ~= 6 then return end
 
+Items = Items or {} -- global containing item tools
+
 local function callWhenGameInitialized(f, ...)
     if GameInitialized2 then
         f(...)
@@ -572,7 +574,9 @@ do
         processReferencesTable("SpcItemsTxt", spcItemsOffset, spcItemCount, spcItemsTxtRefs)
         -- "no" is converted to int as 0 (not mixable)
         -- "E4" = explosion, power 4
-        processReferencesTable("PotionTxt", potionTxtOffset, potionTxtCount, potionTxtRefs)local potionTxtHooks = HookManager{
+        processReferencesTable("PotionTxt", potionTxtOffset, potionTxtCount, potionTxtRefs)
+        
+        local potionTxtHooks = HookManager{
             count = itemCount, potionTxt = potionTxtOffset, stringToInt = 0x4AEF19, potionTxtCols = potionTxtCols, potionTxtColIdMap = potionTxtColIdMap
         }
 
@@ -1114,38 +1118,47 @@ do
             -- if value at index idx is 0, item idx cannot be generated (artifacts and quest items by default), otherwise it can
             evt.CanItemBeRandomlyFound = can
             HookManager{
-                buf = buf, itemCount = itemCount
-            }.asmpatch(0x448A1F, [[
+                buf = buf, itemCount = itemCount, 
+            }.asmpatch(0x448A1C, [[
                 ; edi = item id
                 mov cl, [%buf% + edi - 1]
                 test cl, cl
-                jne absolute 0x4489A2
-                ; current cannot be generated - find first which can
-                push esi
-                xchg esi, edi
-                lea edi, [%buf% + esi]
-                mov ecx, %itemCount%
-                sub ecx, esi
-                push eax
-                mov al, 1
-                repne scasb
-                pop eax
-                xchg esi, edi
-                pop esi
-                jne @exit
-                sub edi, %buf% - 1
+                jne @nextIteration
+                    ; current cannot be generated - find first which can
+                    push esi
+                    xchg esi, edi
+                    lea edi, [%buf% + esi]
+                    mov ecx, %itemCount%
+                    sub ecx, esi
+                    push eax
+                    mov al, 1
+                    repne scasb
+                    pop eax
+                    xchg esi, edi
+                    pop esi
+                    jne @exit
+                        ; correct item id
+                        neg ecx
+                        lea edi, [%itemCount% + ecx]
+                        ; ptr to correct item chance for slot
+                        lea eax, [edi + edi * 4]
+                        lea eax, [esi + eax * 8 + 0x1A + 4] ; +4 to skip items size field
+                        add eax, ebx ; treasure level - 1
+                        jmp absolute 0x4489A2
+                @nextIteration:
+                add eax, 0x28
                 jmp absolute 0x4489A2
                 @exit:
-            ]], 0xC)
+            ]], 0xF)
         end
-        
+        --evt.CanItemBeRandomlyFound[591] = true; tryGetMouseItem(591, 6)
         mem.hookfunction(0x44A6B0, 1, 0, function(d, def, itemPtr)
             local item = structs.Item:new(itemPtr)
             local t = {Item = item, Allow = true}
             events.cocall("GenerateArtifact", t)
             if t.Allow then
                 local r = def(itemPtr)
-                t.GenerationSuccessful = r
+                t.GenerationSuccessful = r ~= 0
                 events.cocall("ArtifactGenerated", t)
                 return r
             end
