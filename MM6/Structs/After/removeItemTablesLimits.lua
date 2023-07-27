@@ -570,20 +570,14 @@ do
         processReferencesTable("ItemsTxt", itemsOffset, itemCount, itemsTxtRefs, newSpace)
         processReferencesTable("StdItemsTxt", stdItemsOffset, stdItemCount, stdItemsTxtRefs)
         processReferencesTable("SpcItemsTxt", spcItemsOffset, spcItemCount, spcItemsTxtRefs)
-
         -- "no" is converted to int as 0 (not mixable)
         -- "E4" = explosion, power 4
-        processReferencesTable("PotionTxt", potionTxtOffset, potionTxtCount, potionTxtRefs)
-        -- fortunately upvalues are shared, so no loop is needed
-        internal.SetArrayUpval(Game.PotionTxt[Game.PotionTxt.Low], "low", 1)
-        internal.SetArrayUpval(Game.PotionTxt, "low", 1)
-        internal.SetArrayUpval(Game.PotionTxt[Game.PotionTxt.Low], "count", itemCount)
-        -- TODO: upvalue "f" change from u1 to u2, the least hackish way possible
-
-        local potionTxtHooks = HookManager{
+        processReferencesTable("PotionTxt", potionTxtOffset, potionTxtCount, potionTxtRefs)local potionTxtHooks = HookManager{
             count = itemCount, potionTxt = potionTxtOffset, stringToInt = 0x4AEF19, potionTxtCols = potionTxtCols, potionTxtColIdMap = potionTxtColIdMap
         }
-        -- CHANGE TO USE WORD
+
+        -- PotionTxt: CHANGE TO USE WORD INSTEAD OF BYTE
+        -- TODO: if any column or row intersecting item has nonzero value, automatically make item mixable?
         -- also use dynamic column-itemId map (and support missing columns)
         potionTxtHooks.asmpatch(0x446641, [[
             lea ecx, [ebx - 6]
@@ -600,16 +594,19 @@ do
             jmp absolute 0x446673
         ]])
 
-        -- calc potion txt offset
-        HookManager{
-            count = potionTxtCount
-        }.asmpatch(0x410BA9, [[
-            ; ecx = rightclicked id, eax = mouse item
-            ud2 ; todo
-        ]])
+        -- decide result potion by table indexes
+        potionTxtHooks.asmpatch(0x410BA9, [[
+            ; ecx = rightclicked id, eax = mouse item (first array index)
+            dec ecx
+            shl ecx, 1
+            dec eax
+            imul eax, %count%
+            xor ebx, ebx
+            mov bx, [ecx + eax * 2 + %potionTxt%]
+        ]], 0xD)
 
+        -- get current index from first column
         potionTxtHooks.asmpatch(0x44662E, [[
-            ; get current index from first column
             test ebx, ebx
             jne @std
                 push esi
@@ -625,14 +622,18 @@ do
         ]])
         mem.nop(0x446690) -- don't increase ebp (address to which data is written) by column count
 
-        -- no column limit
-        --[=[
-        mem.nop(0x446636)
-        mem.nop(0x44667E)
-        asmpatch(0x446633, [[
-
-        ]])
-        ]=]
+        -- fix Game.PotionTxt array
+        do
+            -- fortunately upvalues are shared, so no loop is needed
+            local pot = Game.PotionTxt[Game.PotionTxt.Low]
+            internal.SetArrayUpval(Game.PotionTxt, "low", 1)
+            internal.SetArrayUpval(Game.PotionTxt, "size", itemCount * 2)
+            internal.SetArrayUpval(pot, "low", 1)
+            internal.SetArrayUpval(pot, "count", itemCount)
+            local _, handler = debug.findupvalue(mem.structs.types.u2, "handler")
+            internal.SetArrayUpval(pot, "f", handler)
+            internal.SetArrayUpval(pot, "size", 2)
+        end
 
         -- update mmextension hardcoded address
         do
@@ -736,6 +737,30 @@ do
         -- asmpatch(0x4497F9, "cmp edi," .. itemCount)
 
         setItemDrawingHooks()
+
+        function testItemGeneration()
+            local item = Mouse.Item
+            for _, itemType in pairs(const.ItemType) do
+                for treasureLevel = 1, 6 do
+                    for cnt = 1, 1000 do
+                        item:Randomize(treasureLevel, itemType)
+                    end
+                end
+            end
+        end
+
+        function tryGetMouseItem(id, lev)
+            local typ = Game.ItemsTxt[id].EquipStat + 1
+            local item = Mouse.Item
+            for c = 1, 10000 do
+                item:Randomize(lev, typ)
+                if item.Number == id then
+                    print(true, c)
+                    return
+                end
+            end
+            print(false)
+        end
 
         -- TODO: generateArtifact (0x44A6B0)
 
@@ -1284,7 +1309,7 @@ do
         hook(0x410BA2, function(d)
             local clicked, mouse = structs.Item:new(d.edi), Mouse.Item
             -- set result to false to restrict mixing, 0 lets vanilla code select new potion (will probably crash for nonstandard ones)
-            local t = {ClickedPotion = clicked, MousePotion = mouse, Player = GetPlayer(d.esi), Handled = false, Result = 0, ResultPower = 0, Explosion = false}
+            local t = {ClickedPotion = clicked, MousePotion = mouse, Player = GetPlayer(d.esi), Handled = false, Result = 0, ResultPower = 0, Explosion = false, PotionTxtResult = Game.PotionTxt[mouse.Number][clicked.Number]}
             t.ClickedPower, t.MousePower = t.ClickedPotion.Bonus, t.MousePotion.Bonus
             function t.CheckCombination(a, b) -- returns true if two provided ids are ids of any potion participating in mixing
                 return clicked.Number == a and mouse.Number == b or clicked.Number == b and mouse.Number == a
