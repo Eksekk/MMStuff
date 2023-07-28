@@ -270,7 +270,7 @@ local function processReferencesTable(args)
             for cmdSize, addresses in pairs(addresses) do
                 if what == "relative" then
                     local function checkRelative(old, new, cmdSize, i)
-                        check(old + origin, new + newAddress, cmdSize, i)
+                        check(old + oldRelativeBegin, new + newRelativeBegin, cmdSize, i)
                     end
                     replacePtrs{addrTable = addresses, newAddr = newAddress - assert(newRelativeBegin), origin = origin - assert(oldRelativeBegin),
                         cmdSize = cmdSize, check = checkRelative}
@@ -309,14 +309,13 @@ end
 -- if col #needCol is not empty, current count is updated to its index, otherwise nothing is done - meant to exclude empty entries at the end of some files
 
 do
-
 	--[[
-		ItemsTxt:       low = 0x560C14    high = 0x5666DC   size = 0x5AC8     itemSize = 0x28   dataOffset = 0x0 
-        StdItemsTxt:    low = 0x5666DC    high = 0x5667F4   size = 0x118      itemSize = 0x14   dataOffset = 0x5AC8
-        SpcItemsTxt:    low = 0x5667F4    high = 0x566E68   size = 0x674      itemSize = 0x1C   dataOffset = 0x5BE0
-        PotionTxt:      low = 0x56A780    high = 0x56AAC9   size = 0x349      itemSize = 0x1D   dataOffset = 0x9B6C
+		ItemsTxt:       low = 0x560C14    high = 0x5666DC   size = 0x5AC8     itemSize = 0x28   dataOffset = 0x4 
+        StdItemsTxt:    low = 0x5666DC    high = 0x5667F4   size = 0x118      itemSize = 0x14   dataOffset = 0x5ACC
+        SpcItemsTxt:    low = 0x5667F4    high = 0x566E68   size = 0x674      itemSize = 0x1C   dataOffset = 0x5BE4
+        PotionTxt:      low = 0x56A780    high = 0x56AAC9   size = 0x349      itemSize = 0x1D   dataOffset = 0x9B70
 
-        ScrollTxt:      low = 0x6A86A8    high = 0x6A8804   size = 0x15C      itemSize = 0x4    dataOffset = 0x147A94
+        ScrollTxt:      low = 0x6A86A8    high = 0x6A8804   size = 0x15C      itemSize = 0x4    dataOffset = 0x147A98
 	]]
 
     local scrollTxtRefs = {
@@ -336,6 +335,10 @@ do
         limit = {
             [1] = {0x425734, 0x425786, 0x4259ED, 0x425A3F},
             [4] = {0x449D7F}
+        },
+        relative = {
+            [2] = {0x449D75, 0x449ED5, 0x448D0F}, 
+            [3] = {0x448E44, 0x448E8D}
         }
     }
 
@@ -344,6 +347,10 @@ do
         [3] = {0x41CB34, 0x4256F7, 0x4259B0, 0x425C53, 0x44870B},
         limit = {
             [4] = {0x449B3B}
+        },
+        relative = {
+            [2] = {0x449B31, 0x449C3C}, 
+            [3] = {0x448C86, 0x448C4F},
         }
     }
 
@@ -375,6 +382,9 @@ do
     local potionTxtRefs = {
         [3] = {0x410BAF}, -- this one really references unused space before, but since it's indexed by [1st potion item id * 29] + [2nd potion id], it uses address inside as constant
         lowerBoundIncrease = 165,
+        relative = {
+            [2] = {0x4465DE}
+        }
     }
 	
     -- various enchantment power ranges etc.
@@ -383,16 +393,22 @@ do
         [2] = {0x425710, 0x425716, 0x4259C9, 0x4259CF, 0x425C6C, 0x425C72},
         [3] = {0x4256B5, 0x42596E, 0x425C11},
     }
-    -- relative offsets from item data start
-    local relativeItemDataRefs = {
-        [2] = {0x448F95, 0x4496C8, 0x449835, 0x44991E, 0x449932, 0x449946, 0x44996B, 0x44997F, 0x449993, 0x4499B8, 0x4499CC, 0x4499E0, 0x449A05, 0x449A19, 0x449A2D, 0x449A4B, 0x449A5C, 0x449A6D, 0x449A8B, 0x449A9C, 0x449AAD, 0x449AFF, 0x449B31, 0x449C32, 0x449C3C, 0x4465DE, 0x449D43, 0x449D75, 0x449EC1, 0x449ECB, 0x449ED5, 0x449EDD, 0x449EF4, 0x44A61B, 0x44A630, 0x44A645, 0x44A65A, 0x44A66F, 0x44A683, 0x44A692, 0x44A69E, 0x448CE7, 0x448D0F, 0x448E04},
-        [3] = {0x448C3B, 0x448C4F, 0x448CC9, 0x448E44, 0x448E8D, 0x448B00, 0x448B85, 0x448BA1, 0x448BE9, 0x448C05, 0x448C10, 0x448C9E, 0x448CAA,
-            -- stditems.txt
-            0x448C86,
-            -- 0x448D4E, 0x448D8A, 0x448DBC, 0x448DE2, -- these are not changed, because final offset is calculated with pointer to spcbonus with already corrected value
-        }
+
+    local relativeMiscDataRefs = { -- like above, but relative; refs after potions end
+        [2] = {0x448F95, 0x44A69E, 0x44A65A, 0x4496C8, 0x44A645, 0x44A692, 0x44A683, 0x44A630, 0x449AFF, 0x44A66F, 0x44A61B, 0x449D43, 0x449835, 0x449946, 0x449993, 0x4499E0, 0x449A2D, 0x449A6D, 0x449AAD, 0x449932, 0x44997F, 0x4499CC, 0x449A19, 0x449A5C, 0x449A9C, 0x44991E, 0x44996B, 0x4499B8, 0x449A05, 0x449A4B, 0x449A8B, 0x449C32, 0x449EC1, 0x448CE7, 0x449ECB, 0x449EDD, 0x449EF4, 0x448E04}, 
+        [3] = {0x448B00, 0x448C05, 0x448BE9, 0x448CC9, 0x448C10, 0x448B85, 0x448BA1, 0x448C3B, 0x448C9E, 0x448CAA}
     }
-    -- so the issue is that relative item refs get breakpoint values assigned automatically, which is sometimes wrong
+    
+    -- relative offsets from item data start
+    -- local relativeItemDataRefs = {
+    --     [2] = {0x448F95, 0x4496C8, 0x449835, 0x44991E, 0x449932, 0x449946, 0x44996B, 0x44997F, 0x449993, 0x4499B8, 0x4499CC, 0x4499E0, 0x449A05, 0x449A19, 0x449A2D, 0x449A4B, 0x449A5C, 0x449A6D, 0x449A8B, 0x449A9C, 0x449AAD, 0x449AFF, 0x449B31, 0x449C32, 0x449C3C, 0x4465DE, 0x449D43, 0x449D75, 0x449EC1, 0x449ECB, 0x449ED5, 0x449EDD, 0x449EF4, 0x44A61B, 0x44A630, 0x44A645, 0x44A65A, 0x44A66F, 0x44A683, 0x44A692, 0x44A69E, 0x448CE7, 0x448D0F, 0x448E04},
+    --     [3] = {0x448C3B, 0x448C4F, 0x448CC9, 0x448E44, 0x448E8D, 0x448B00, 0x448B85, 0x448BA1, 0x448BE9, 0x448C05, 0x448C10, 0x448C9E, 0x448CAA,
+    --         -- stditems.txt
+    --         0x448C86,
+    --         -- 0x448D4E, 0x448D8A, 0x448DBC, 0x448DE2, -- these are not changed, because final offset is calculated with pointer to spcbonus with already corrected value
+    --     }
+    -- }
+    -- so the issue was that relative item refs get breakpoint values assigned automatically, which is sometimes wrong
     -- (for example, value can be below lowest index of stditems.txt, meant to be used with ItemSize offset >= 1 entries)
 
     function categorizeRelativeItemRefs()
@@ -400,14 +416,15 @@ do
             print("cmdSize:", cmdSize)
             local vals = {}
             for i, v in ipairs(addrs) do
-                vals[mem.u4[v + cmdSize]] = string.format("0x%X -> 0x%X", v, mem.u4[v + cmdSize])
+                vals[#vals + 1] = {string.format("0x%X -> 0x%X", v, mem.u4[v + cmdSize]), mem.u4[v + cmdSize]}
             end
-            for i, v in sortpairs(vals) do
-                print(v)
+            table.sort(vals, function(a, b) return a[2] < b[2] end)
+            for i, v in ipairs(vals) do
+                print(v[1])
             end
         end
     end
-    do return end
+    
     -- 0x6BA998 is scroll.txt contents
     autohook(0x468084, function(d)
         -- just loaded scroll.txt
@@ -544,36 +561,30 @@ do
         -- needed: old and new relative data start addresses (to compute relative offset, (newBegin - newRelativeBegin) - (old begin - oldRelativeBegin))
         debug.Message(format("items %d, std %d, spc %d, potion %d", itemCount, stdItemCount, spcItemCount, potionTxtCount),
             format("size item %d, std %d, spc %d, potion %d, full %d", itemsSize, stdItemsSize, spcItemsSize, potionTxtSize, itemsSize + stdItemsSize + spcItemsSize + potionTxtSize + 0x3A43))
-        local minOldOff, maxOldOff, minNewOff, maxNewOff = 0, 0, 0, 0
-        for offset, shift in pairs(breakpoints) do
-            maxOldOff = max(maxOldOff, offset)
-            maxNewOff = maxNewOff + shift
-        end
-        maxNewOff = maxNewOff + maxOldOff
+
+        local itemDataBegin = 0x560C10
+        
+        local oldRelativeMiscDataOrigin = Game.PotionTxt["?ptr"] + Game.PotionTxt.Size - itemDataBegin
+        local newRelativeMiscDataOrigin = otherDataOffset - newSpace
+
+        local minOldOff, maxOldOff = itemDataBegin, Game.PotionTxt["?ptr"] + Game.PotionTxt.Size + 0x127
+        local minNewOff, maxNewOff = newSpace, otherDataOffset + 0x127
 
         local function check(old, new, cmdSize, i)
             assert(old >= minOldOff and old <= maxOldOff, format("Old item data offset 0x%X (cmdSize %d, index %d) is outside bounds [0x%X, 0x%X]", old, cmdSize, i, minOldOff, maxOldOff))
             assert(new >= minNewOff and new <= maxNewOff, format("New item data offset 0x%X (cmdSize %d, index %d) is outside bounds [0x%X, 0x%X]", new, cmdSize, i, minNewOff, maxNewOff))
         end
 
-        local function getNewDataOffset(old)
-            local val = old
-            for offset, shift in pairs(breakpoints) do
-                if old >= offset then
-                    val = val + shift
-                end
-            end
-            return val
-        end
-
-        for cmdSize, addresses in pairs(relativeItemDataRefs) do
-            replacePtrs{addrTable = addresses, cmdSize = cmdSize, func = getNewDataOffset, check = check}
-        end
-
-        maxOldOff, maxNewOff = maxOldOff + 0x56AADC, maxNewOff + newSpace
-        minOldOff, minNewOff = minOldOff + 0x56AADC, minNewOff + newSpace
         for cmdSize, addresses in pairs(otherItemDataRefs) do
-            replacePtrs{addrTable = addresses, cmdSize = cmdSize, origin = 0x56AADC, newAddr = otherDataOffset, check = check}
+            replacePtrs{addrTable = addresses, cmdSize = cmdSize, origin = oldRelativeMiscDataOrigin + itemDataBegin, newAddr = otherDataOffset, check = check}
+        end
+
+        -- relative offsets now
+        minOldOff, maxOldOff = minOldOff - itemDataBegin, maxOldOff - itemDataBegin
+        minNewOff, maxNewOff = minNewOff - newSpace, maxNewOff - newSpace
+
+        for cmdSize, addresses in pairs(relativeMiscDataRefs) do
+            replacePtrs{addrTable = addresses, cmdSize = cmdSize, check = check, origin = oldRelativeMiscDataOrigin, newAddr = newRelativeMiscDataOrigin}
         end
 
         -- fix stdbonus chance sums breaking due to weird addressing
@@ -599,17 +610,18 @@ do
             count = itemCount, potionTxt = potionTxtOffset, stringToInt = 0x4AEF19, potionTxtCols = potionTxtCols, potionTxtColIdMap = potionTxtColIdMap
         }
 
-        local relOld, relNew = 0x560C10, newSpace
         processReferencesTable{arrName = "ItemsTxt", newAddress = itemsOffset, newCount = itemCount, addressTable = itemsTxtRefs, lenP = newSpace,
-            oldRelativeBegin = relOld, newRelativeBegin = relNew}
+            oldRelativeBegin = itemDataBegin, newRelativeBegin = newSpace}
         processReferencesTable{arrName = "StdItemsTxt", newAddress = stdItemsOffset, newCount = stdItemCount, addressTable = stdItemsTxtRefs,
-            oldRelativeBegin = relOld, newRelativeBegin = relNew}
+            oldRelativeBegin = itemDataBegin, newRelativeBegin = newSpace}
         processReferencesTable{arrName = "SpcItemsTxt", newAddress = spcItemsOffset, newCount = spcItemCount, addressTable = spcItemsTxtRefs,
-            oldRelativeBegin = relOld, newRelativeBegin = relNew}
+            oldRelativeBegin = itemDataBegin, newRelativeBegin = newSpace}
+        
         -- "no" is converted to int as 0 (not mixable)
         -- "E4" = explosion, power 4
         processReferencesTable{arrName = "PotionTxt", newAddress = potionTxtOffset, newCount = potionTxtCount, addressTable = potionTxtRefs,
-            oldRelativeBegin = relOld, newRelativeBegin = relNew}
+            oldRelativeBegin = itemDataBegin, newRelativeBegin = newSpace}
+
         asmpatch(0x4465E4, "mov dword ptr [esp+0x14]," .. potionTxtRowCount - 1)
 
         -- PotionTxt: CHANGE TO USE WORD INSTEAD OF BYTE
@@ -1404,6 +1416,8 @@ do
             mov [edi + 4], eax
             @exit:
         ]], 0xA)
+
+        -- TODO: autonotes 0x410FDD
 
         -- tests
         do
