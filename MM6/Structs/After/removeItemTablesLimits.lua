@@ -244,7 +244,9 @@ function replacePtrs(t) -- addrTable, newAddr, origin, cmdSize, check)
 	end
 end
 
-local function processReferencesTable(arrName, newAddress, newCount, addressTable, lenP)
+local function processReferencesTable(args)
+    local arrName, newAddress, newCount, addressTable, lenP = args.arrName, args.newAddress, args.newCount, args.addressTable, args.lenP
+    local oldRelativeBegin, newRelativeBegin = args.oldRelativeBegin, args.newRelativeBegin
     local arr = Game[arrName]
     local origin = arr["?ptr"]
     local lowerBoundIncrease = (addressTable.lowerBoundIncrease or 0) * arr.ItemSize
@@ -264,26 +266,35 @@ local function processReferencesTable(arrName, newAddress, newCount, addressTabl
             -- special refs
             local what = cmdSize
             local memArr = addresses.arr or i4
+            local relativeOrigin = addresses.origin
             for cmdSize, addresses in pairs(addresses) do
-                for i, data in ipairs(addresses) do
-                    -- support per-address mem array types
-                    local memArr, addr = memArr -- intentionally override local
-                    if type(data) == "table" then
-                        memArr = data.arr or memArr
-                        addr = data[1]
-                    else
-                        addr = data
+                if what == "relative" then
+                    local function checkRelative(old, new, cmdSize, i)
+                        check(old + origin, new + newAddress, cmdSize, i)
                     end
-                    if what == "limit" then
-                        memArr[addr + cmdSize] = memArr[addr + cmdSize] - arr.Limit + newCount
-                    elseif what == "count" then
-                        -- skip (I don't move count addresses atm)
-                    elseif what == "high" then
-                        memArr[addr + cmdSize] = newCount - 1
-                    elseif what == "size" then
-                        memArr[addr + cmdSize] = arr.ItemSize * newCount
-                    elseif what == "End" then
-                        memArr[addr + cmdSize] = newAddress + arr.ItemSize * newCount
+                    replacePtrs{addrTable = addresses, newAddr = newAddress - assert(newRelativeBegin), origin = origin - assert(oldRelativeBegin),
+                        cmdSize = cmdSize, check = checkRelative}
+                else
+                    for i, data in ipairs(addresses) do
+                        -- support per-address mem array types
+                        local memArr, addr = memArr -- intentionally override local
+                        if type(data) == "table" then
+                            memArr = data.arr or memArr
+                            addr = data[1]
+                        else
+                            addr = data
+                        end
+                        if what == "limit" then
+                            memArr[addr + cmdSize] = memArr[addr + cmdSize] - arr.Limit + newCount
+                        elseif what == "count" then
+                            -- skip (I don't move count addresses atm)
+                        elseif what == "high" then
+                            memArr[addr + cmdSize] = newCount - 1
+                        elseif what == "size" then
+                            memArr[addr + cmdSize] = arr.ItemSize * newCount
+                        elseif what == "End" then
+                            memArr[addr + cmdSize] = newAddress + arr.ItemSize * newCount
+                        end
                     end
                 end
             end
@@ -331,6 +342,9 @@ do
     local stdItemsTxtRefs = { -- relative done
         [2] = {0x4256CE, 0x425987, 0x425C2A},
         [3] = {0x41CB34, 0x4256F7, 0x4259B0, 0x425C53, 0x44870B},
+        limit = {
+            [4] = {0x449B3B}
+        }
     }
 
     local itemsTxtRefs = {
@@ -369,7 +383,6 @@ do
         [2] = {0x425710, 0x425716, 0x4259C9, 0x4259CF, 0x425C6C, 0x425C72},
         [3] = {0x4256B5, 0x42596E, 0x425C11},
     }
-
     -- relative offsets from item data start
     local relativeItemDataRefs = {
         [2] = {0x448F95, 0x4496C8, 0x449835, 0x44991E, 0x449932, 0x449946, 0x44996B, 0x44997F, 0x449993, 0x4499B8, 0x4499CC, 0x4499E0, 0x449A05, 0x449A19, 0x449A2D, 0x449A4B, 0x449A5C, 0x449A6D, 0x449A8B, 0x449A9C, 0x449AAD, 0x449AFF, 0x449B31, 0x449C32, 0x449C3C, 0x4465DE, 0x449D43, 0x449D75, 0x449EC1, 0x449ECB, 0x449ED5, 0x449EDD, 0x449EF4, 0x44A61B, 0x44A630, 0x44A645, 0x44A65A, 0x44A66F, 0x44A683, 0x44A692, 0x44A69E, 0x448CE7, 0x448D0F, 0x448E04},
@@ -379,7 +392,22 @@ do
             -- 0x448D4E, 0x448D8A, 0x448DBC, 0x448DE2, -- these are not changed, because final offset is calculated with pointer to spcbonus with already corrected value
         }
     }
+    -- so the issue is that relative item refs get breakpoint values assigned automatically, which is sometimes wrong
+    -- (for example, value can be below lowest index of stditems.txt, meant to be used with ItemSize offset >= 1 entries)
 
+    function categorizeRelativeItemRefs()
+        for cmdSize, addrs in pairs(relativeItemDataRefs) do
+            print("cmdSize:", cmdSize)
+            local vals = {}
+            for i, v in ipairs(addrs) do
+                vals[mem.u4[v + cmdSize]] = string.format("0x%X -> 0x%X", v, mem.u4[v + cmdSize])
+            end
+            for i, v in sortpairs(vals) do
+                print(v)
+            end
+        end
+    end
+    do return end
     -- 0x6BA998 is scroll.txt contents
     autohook(0x468084, function(d)
         -- just loaded scroll.txt
@@ -387,7 +415,7 @@ do
         -- needs consideration: make item id be binding instead of row index?
         local count = DataTables.ComputeRowCountInPChar(d.eax, 1, 1)
         local newScrollSpaceAddr = StaticAlloc(count * 4) -- editpchar size
-        processReferencesTable("ScrollTxt", newScrollSpaceAddr, count, scrollTxtRefs)
+        processReferencesTable{arrName = "ScrollTxt", newAddress = newScrollSpaceAddr, newCount = count, addressTable = scrollTxtRefs}
     end)
 
     -- ITEM DATA MEMORY LAYOUT:
@@ -408,6 +436,7 @@ do
     local hooks = HookManager{itemsTxtDataPtr = itemsTxtDataPtr, rndItemsTxtDataPtr = rndItemsTxtDataPtr, stdItemsTxtDataPtr = stdItemsTxtDataPtr, spcItemsTxtDataPtr = spcItemsTxtDataPtr, useItemsTxtDataPtr = useItemsTxtDataPtr, itemsTxtFileName = 0x4BFE04, stdItemsTxtFileName = 0x4BFCD8, spcItemsTxtFileName = 0x4BFCC8, iconsLod = Game.IconsLod["?ptr"], loadFileFromLod = 0x40C1A0, useItemsTxtFileName = 0x4BF9BC, rndItemsTxtFileName = 0x4BFCE8}
 
     -- load tables
+    -- address is just before loading useitems.txt
     local addr = hooks.asmpatch(0x44654D, [[
         ; items.txt
         mov ecx, %iconsLod%
@@ -451,16 +480,13 @@ do
         nop
     ]], 0x1B)
 
-    --> (Game.PotionTxt[164].?ptr + 5):tohex()
-  --"56A7F9"
-
     local setItemDrawingHooks, setMiscItemHooks, setAlchemyHooks
 
     --for i = 1, 100 do Party[0].Items[1]:Randomize(6) end
     hook(mem.findcode(addr, NOP), function(d)
-        local itemCount, stdItemCount, spcItemCount = DataTables.ComputeRowCountInPChar(u4[itemsTxtDataPtr], 0, 1) - 3 + 1, -- 0th item also counts
+        local itemCount, stdItemCount, spcItemCount = DataTables.ComputeRowCountInPChar(u4[itemsTxtDataPtr], 0, 2) - 3 + 1, -- 0th item also counts
             DataTables.ComputeRowCountInPChar(u4[stdItemsTxtDataPtr], 1, 1) - 4, DataTables.ComputeRowCountInPChar(u4[spcItemsTxtDataPtr], 1, 2) - 11
-        -- local potionTxtCount = DataTables.ComputeRowCountInPChar(u4[useItemsTxtDataPtr], 0, 2) - 9 -- the file for this is useItems.txt
+        local potionTxtRowCount = DataTables.ComputeRowCountInPChar(u4[useItemsTxtDataPtr], 0, 2) - 9 -- the file for this is useItems.txt
         local potionTxtCount = itemCount -- my change
         -- TODO: potion txt offset computation uses hardcoded 29 value, it might have not been replaced
         local potionTxtCols, potionTxtColIds = 0, {}
@@ -480,6 +506,8 @@ do
         for i, v in ipairs(potionTxtColIds) do
             u4[potionTxtColIdMap + (i - 1) * 4] = v
         end
+
+        -- FIXME: test helm can get "dragon slayer" enchantment
 
         local origItemDataOffset = Game.ItemsTxt["?ptr"] - 4 -- -4 for size field
 
@@ -512,12 +540,10 @@ do
             breakpoints[offset] = 0
             --debug.Message(dump(breakpoints))
         end
-        -- local c = 0
-        -- for k, v in pairs(breakpoints) do
-        --     c = max(c, k)
-        -- end
-        -- debug.Message(unpack{format("items %d, std %d, spc %d, potion %d, max bp %d", itemCount, stdItemCount, spcItemCount, potionTxtCount, c),
-        --     format("size item %d, std %d, spc %d, potion %d, full %d", itemsSize, stdItemsSize, spcItemsSize, potionTxtSize, itemsSize + stdItemsSize + spcItemsSize + potionTxtSize + 0x3A43)})
+
+        -- needed: old and new relative data start addresses (to compute relative offset, (newBegin - newRelativeBegin) - (old begin - oldRelativeBegin))
+        debug.Message(format("items %d, std %d, spc %d, potion %d", itemCount, stdItemCount, spcItemCount, potionTxtCount),
+            format("size item %d, std %d, spc %d, potion %d, full %d", itemsSize, stdItemsSize, spcItemsSize, potionTxtSize, itemsSize + stdItemsSize + spcItemsSize + potionTxtSize + 0x3A43))
         local minOldOff, maxOldOff, minNewOff, maxNewOff = 0, 0, 0, 0
         for offset, shift in pairs(breakpoints) do
             maxOldOff = max(maxOldOff, offset)
@@ -568,17 +594,23 @@ do
 
         setMiscItemHooks(itemCount, enchantmentDataOffset)
         setAlchemyHooks(itemCount)
-
-        processReferencesTable("ItemsTxt", itemsOffset, itemCount, itemsTxtRefs, newSpace)
-        processReferencesTable("StdItemsTxt", stdItemsOffset, stdItemCount, stdItemsTxtRefs)
-        processReferencesTable("SpcItemsTxt", spcItemsOffset, spcItemCount, spcItemsTxtRefs)
-        -- "no" is converted to int as 0 (not mixable)
-        -- "E4" = explosion, power 4
-        processReferencesTable("PotionTxt", potionTxtOffset, potionTxtCount, potionTxtRefs)
         
         local potionTxtHooks = HookManager{
             count = itemCount, potionTxt = potionTxtOffset, stringToInt = 0x4AEF19, potionTxtCols = potionTxtCols, potionTxtColIdMap = potionTxtColIdMap
         }
+
+        local relOld, relNew = 0x560C10, newSpace
+        processReferencesTable{arrName = "ItemsTxt", newAddress = itemsOffset, newCount = itemCount, addressTable = itemsTxtRefs, lenP = newSpace,
+            oldRelativeBegin = relOld, newRelativeBegin = relNew}
+        processReferencesTable{arrName = "StdItemsTxt", newAddress = stdItemsOffset, newCount = stdItemCount, addressTable = stdItemsTxtRefs,
+            oldRelativeBegin = relOld, newRelativeBegin = relNew}
+        processReferencesTable{arrName = "SpcItemsTxt", newAddress = spcItemsOffset, newCount = spcItemCount, addressTable = spcItemsTxtRefs,
+            oldRelativeBegin = relOld, newRelativeBegin = relNew}
+        -- "no" is converted to int as 0 (not mixable)
+        -- "E4" = explosion, power 4
+        processReferencesTable{arrName = "PotionTxt", newAddress = potionTxtOffset, newCount = potionTxtCount, addressTable = potionTxtRefs,
+            oldRelativeBegin = relOld, newRelativeBegin = relNew}
+        asmpatch(0x4465E4, "mov dword ptr [esp+0x14]," .. potionTxtRowCount - 1)
 
         -- PotionTxt: CHANGE TO USE WORD INSTEAD OF BYTE
         -- TODO: if any column or row intersecting item has nonzero value, automatically make item mixable?
@@ -610,21 +642,30 @@ do
         ]], 0xD)
 
         -- get current index from first column
+        -- also here: execute code for column indexes above 0x22
         potionTxtHooks.asmpatch(0x44662E, [[
             test ebx, ebx
             jne @std
+                ; compute offset to put data at
                 push esi
                 call absolute %stringToInt%
                 add esp, 4
-                mov ebp, eax
-                dec ebp
+                lea ebp, [eax - 1]
                 imul ebp, %count% * 2
                 add ebp, %potionTxt%
             @std:
             cmp ebx, 6
             jl absolute 0x446673
-        ]])
+            cmp ebx, %potionTxtCols% ; more columns parsed
+            jg absolute 0x446673
+        ]], 0xA)
+
         mem.nop(0x446690) -- don't increase ebp (address to which data is written) by column count
+
+        potionTxtHooks.asmpatch(0x44667B, [[
+            cmp edx, %potionTxtCols% ; more columns parsed
+            jg absolute 0x44668C
+        ]], 5)
 
         -- fix Game.PotionTxt array
         do
@@ -1052,7 +1093,7 @@ do
             -- [0x18] bonus chance by level from rnditems.txt (dword, level 1-6): standard, special, special% : 0x56AAF4, 18 dwords
             -- [0x60] std item bonus chances (column sums) : 0x56AB3C, 9 dwords
             -- [0x84] std bonus strength ranges: [min, max] for each treasure level: 0x56AB60, 12 dwords
-            -- spc item bonus chances (column sums): 0x56AB90, 12 dwords
+            -- [0xB4] spc item bonus chances (column sums): 0x56AB90, 12 dwords
         ]]
 
         evt.RndItemsChanceSums = makeMemoryTogglerTable{arr = u4, size = 4, buf = enchantmentDataOffset,
@@ -1082,7 +1123,7 @@ do
         end
 
         evt.StdBonusChanceSums = makeMemoryTogglerTable{arr = u4, size = 4, buf = enchantmentDataOffset + 0x60,
-            minIndex = 1, maxIndex = 6, "Valid indexes are from %d to %d"}
+            minIndex = 1, maxIndex = 9, "Valid indexes are from %d to %d"}
 
         local enchOffset = 0x84
         evt.StdBonusStrengthRanges = setmetatable({}, {__index = function(t, i)
@@ -1105,8 +1146,9 @@ do
             t[i][0] = val[1]
             t[i][1] = val[2]
         end})
-        
-        -- TODO: MORE
+
+        evt.SpcBonusChanceSums = makeMemoryTogglerTable{arr = u4, size = 4, buf = enchantmentDataOffset + 0xB4,
+            minIndex = 1, maxIndex = 12, errorFormat = "Valid indexes are from %d to %d"}
 
         -- can item be generated, TODO: patch all instances
         do
@@ -1402,6 +1444,7 @@ do
             ; sprintf to get text
             ; put it where bonus text is put on stack (if first byte is not 0, it will be printed automatically)
             ; ecx = items txt entry ptr, ebx = item ptr
+            ; FIXME: crashes
             cmp byte [ecx + 0x14], 0xE ; potion bottle
             jne @std
             mov eax, [ebx + 4] ; bonus (power)
