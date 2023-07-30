@@ -15,6 +15,20 @@ if mmver ~= 6 then return end
 
 Items = Items or {} -- global containing item tools
 
+-- HELP --
+
+-- evt.StdBonusStrengthRanges allows you to change default bonuses power. Table is indexed first by treasure level (1-6) and then by either 0 or 1 (lower or upper bound). When you simply index it, you get current value. When you assign to it, that range bound is modified (note that no checks are made for invalid ranges, they might crash the game). You can also assign an array with two fields to set both range ends at once.
+-- examples:
+--[[
+    -- TODO: Low, End, LowEnd fields, newindex, index etc.
+]]
+
+-- evt.CanItemBeRandomlyFound decides, well, whether the item can be found :) It's indexed by item id. When you set false, item can't be generated randomly no matter what. Custom items are set to true by default (if they have nonzero rnditems.txt chances)
+
+-- rnditems.txt file is slightly changed. You can add rows corresponding to any item defined in items.txt (but you don't need to fill in all rows, unfilled ones will simply be zeroed). You don't need to update total chance sums when changing specific items, they are only informational (it was like that in vanilla).
+
+-- HELP END --
+
 local function callWhenGameInitialized(f, ...)
     if GameInitialized2 then
         f(...)
@@ -28,19 +42,17 @@ local function GetPlayer(ptr)
     return Party[(ptr - Party[0]["?ptr"]) / Party[0]["?size"]]
 end
 
-local function checkIndex(index, minIndex, maxIndex, level)
+local function checkIndex(index, minIndex, maxIndex, level, formatStr)
     if index < minIndex or index > maxIndex then
-        error(format("Index %d out of bounds [%d, %d]", index, minIndex, maxIndex), level + 1)
+        error(format(formatStr or "Index %d out of bounds [%d, %d]", index, minIndex, maxIndex), level + 1)
     end
 end
     
 local function makeMemoryTogglerTable(t)
     local arr, buf, minIndex, maxIndex = t.arr, t.buf, t.minIndex, t.maxIndex
-    local bool, errorFormat, size = t.bool, t.errorFormat, t.size
+    local bool, errorFormat, size, minValue, maxValue = t.bool, t.errorFormat, t.size, t.minValue, t.maxValue
     local mt = {__index = function(_, i)
-        if i < minIndex or i > maxIndex then
-            error(format(errorFormat, minIndex, maxIndex), 2)
-        end
+        checkIndex(i, minIndex, maxIndex, 2, errorFormat)
         local off = buf + (i - minIndex) * size
         if bool then
             return arr[off] ~= 0
@@ -49,13 +61,21 @@ local function makeMemoryTogglerTable(t)
         end
     end,
     __newindex = function (_, i, val)
-        if i < minIndex or i > maxIndex then
-            error(format(errorFormat, minIndex, maxIndex), 2)
-        end
+        checkIndex(i, minIndex, maxIndex, 2, errorFormat)
         local off = buf + (i - minIndex) * size
         if bool then
             arr[off] = val and 1 or 0
         else
+            local smaller, greater = val < (minValue or val), val > (maxValue or val)
+            if smaller or greater then
+                local str
+                if smaller then
+                    str = format("New value (%d) is smaller than minimum possible value (%d)", val, minValue)
+                elseif greater then
+                    str = format("New value (%d) is greater than maximum possible value (%d)", val, maxValue)
+                end
+                error(str, 2)
+            end
             arr[off] = val
         end
     end}
@@ -552,26 +572,6 @@ do
         local otherDataOffset = potionTxtOffset + potionTxtSize
         local enchantmentDataOffset = otherDataOffset + 3 + 0x10
 
-        -- if base relative address is bigger than breakpoints key, value for that key needs to be added to make final address (requires summing all that apply)
-        -- this code block must be run before game arrays are changed
-        local breakpoints = {}
-        do
-            local gameArrays = {4, {Game.ItemsTxt, itemsSize}, {Game.StdItemsTxt, stdItemsSize}, {Game.SpcItemsTxt, spcItemsSize}, 0x3918, {Game.PotionTxt, potionTxtSize}, 0x127}
-            local offset = 0
-            for i, data in ipairs(gameArrays) do
-                if type(data) == "number" then
-                    offset = offset + data
-                else
-                    local size = data[1].Limit * data[1].ItemSize
-                    local shift = data[2] - size
-                    breakpoints[offset] = shift
-                    offset = offset + size
-                end
-            end
-            breakpoints[offset] = 0
-            --debug.Message(dump(breakpoints))
-        end
-
         -- needed: old and new relative data start addresses (to compute relative offset, (newBegin - newRelativeBegin) - (old begin - oldRelativeBegin))
         -- debug.Message(format("items %d, std %d, spc %d, potion %d", itemCount, stdItemCount, spcItemCount, potionTxtCount), format("size item %d, std %d, spc %d, potion %d, full %d", itemsSize, stdItemsSize, spcItemsSize, potionTxtSize, itemsSize + stdItemsSize + spcItemsSize + potionTxtSize + 0x3A43))
 
@@ -618,10 +618,6 @@ do
 
         setMiscItemHooks(itemCount, enchantmentDataOffset)
         setAlchemyHooks(itemCount)
-        
-        local potionTxtHooks = HookManager{
-            count = itemCount, potionTxt = potionTxtOffset, stringToInt = 0x4AEF19, potionTxtCols = potionTxtCols, potionTxtColIdMap = potionTxtColIdMap
-        }
 
         processReferencesTable{arrName = "ItemsTxt", newAddress = itemsOffset, newCount = itemCount, addressTable = itemsTxtRefs, lenP = newSpace,
             oldRelativeBegin = itemDataBegin, newRelativeBegin = newSpace}
@@ -634,6 +630,10 @@ do
         -- "E4" = explosion, power 4
         processReferencesTable{arrName = "PotionTxt", newAddress = potionTxtOffset, newCount = potionTxtCount, addressTable = potionTxtRefs,
             oldRelativeBegin = itemDataBegin, newRelativeBegin = newSpace}
+        
+        local potionTxtHooks = HookManager{
+            count = itemCount, potionTxt = potionTxtOffset, stringToInt = 0x4AEF19, potionTxtCols = potionTxtCols, potionTxtColIdMap = potionTxtColIdMap
+        }
 
         asmpatch(0x4465E4, "mov dword ptr [esp+0x14]," .. potionTxtRowCount - 1)
 
@@ -841,8 +841,6 @@ do
         -- TODO: generateArtifact (0x44A6B0)
 
         -- 0x440D43, 0x441891 contains check for artifact added to mouse and if it's artifact, marks as found
-        
-        -- MOVE TABLE DATA POINTERS
 
         -- size: std done, spc done, items done, potion done, scroll done
         -- limit: 
@@ -852,271 +850,269 @@ do
         -- end: 
         -- GAME EXIT CLEANUP FUNCTION
     end)
+end
 
-    -- FIX ALCHEMY BUG (mouse items turning to potion bottle when swapping weapons)
+function setItemDrawingHooks()
+    local itemCount = Game.ItemsTxt.Limit
+    -- DRAWING --
 
-    function setItemDrawingHooks()
-        local itemCount = Game.ItemsTxt.Limit
-        -- DRAWING --
+    -- needed: belts, helms, armors
 
-        -- needed: belts, helms, armors
-
-        local function getArmorPicsFromName(name)
-            local base = name:match("(.-)icon")
-            assert(base)
-            return base .. "bod", base .. "arm1", base .. "arm2"
-        end
-
-        local beltBitmapIds, helmetBitmapIds, armorBitmapIds = StaticAlloc(itemCount * 4), StaticAlloc(itemCount * 4), StaticAlloc(itemCount * 4 * 3)
-        local function process()
-            for i, item in Game.ItemsTxt do
-                if item.EquipStat == const.ItemType.Armor - 1 then
-                    local body, arm1, arm2 = getArmorPicsFromName(item.Picture)
-                    local baseOff = armorBitmapIds + (i - 1) * 12
-                    u4[baseOff] = Game.IconsLod:LoadBitmap(body)
-                    u4[baseOff + 4] = Game.IconsLod:LoadBitmap(arm1)
-                    u4[baseOff + 8] = Game.IconsLod:LoadBitmap(arm2)
-                elseif item.EquipStat == const.ItemType.Belt - 1 then
-                    local name = assert(item.Picture:match("(belt%d+)[abAB]")) .. "b"
-                    u4[beltBitmapIds + (i - 1) * 4] = Game.IconsLod:LoadBitmap(name)
-                elseif item.EquipStat == const.ItemType.Helm - 1 then
-                    local id = item.Picture:match("he?lm(%d+)")
-                    local name
-                    if id then
-                        name = "helm" .. id
-                    end
-                    id = item.Picture:match("hat(%d+)")
-                    if id then
-                        name = "hat" .. id .. "b"
-                    end
-                    if not name then
-                        name = assert(item.Picture:match("(crown%d+)")) .. "b"
-                    end
-                    u4[helmetBitmapIds + (i - 1) * 4] = Game.IconsLod:LoadBitmap(name)
-                end
-            end
-        end
-
-        callWhenGameInitialized(process)
-
-        local hooks = HookManager{belts = beltBitmapIds, helmets = helmetBitmapIds, armors = armorBitmapIds}
-
-        -- armors
-
-        -- checkIndex function for automatic erroring if index is invalid, with stack level to error on, increase by 1 inside
-        local armorXYbuf = StaticAlloc(itemCount * 3 * 2 * 2) -- body and both arms
-        local armorXYwasSet = StaticAlloc(itemCount * 1)
-        local paperdollArmorCoords = {}
-        function paperdollArmorCoords.ClearCustomCoords(id)
-            u1[armorXYwasSet + id - 1] = 0
-        end
-        local function makeCoordsAccessor(itemId, offset)
-            return setmetatable({}, {
-                __index = function(_, what)
-                    what = type(what) == "string" and what:lower() or what
-                    local x, y = i2[armorXYbuf + (itemId - 1) * 12 + offset], i2[armorXYbuf + (itemId - 1) * 12 + offset + 2]
-                    if what == "x" or what == 1 then
-                        return x
-                    elseif what == "y" or what == 2 then
-                        return y
-                    elseif what == "xy" then
-                        return {x, y}
-                    end
-                end,
-                __newindex = function (_, what, val)
-                    what = type(what) == "string" and what:lower() or what
-                    u1[armorXYwasSet + itemId - 1] = 1
-                    local xoff, yoff = armorXYbuf + (itemId - 1) * 12 + offset, armorXYbuf + (itemId - 1) * 12 + offset + 2
-                    if what == "x" or what == 1 then
-                        i2[xoff] = val
-                    elseif what == "y" or what == 2 then
-                        i2[yoff] = val
-                    elseif what == "xy" then
-                        i2[xoff], i2[yoff] = val[1], val[2]
-                    end
-                end
-            })
-        end
-        do
-            local accessorsCache = {}
-            setmetatable(paperdollArmorCoords, {
-                __index = function(self, itemId)
-                    local ret = accessorsCache[itemId]
-                    if not ret then
-                        ret = {Body = makeCoordsAccessor(itemId, 0), LeftArm = makeCoordsAccessor(itemId, 4), RightArm = makeCoordsAccessor(itemId, 8)}
-                        ret[1], ret[2], ret[3] = ret.Body, ret.LeftArm, ret.RightArm
-                        accessorsCache[itemId] = ret
-                    end
-                    -- rawset(self, itemId, ret) -- no rawset to make newindex work, use caching instead
-                    return ret
-                end,
-                __newindex = function(self, itemId, val)
-                    for i, arrName in ipairs{"Body", "LeftArm", "RightArm"} do
-                        local a = self[itemId][arrName]
-                        local innerVal = val[arrName] or val[i]
-                        for k, v in pairs(innerVal) do
-                            a[k] = v
-                        end
-                    end
-                end
-            })
-        end
-        evt.PaperdollArmorCoords = paperdollArmorCoords
-        --[[
-            example usage:
-            local goldenPlateId = 78
-            local coords = evt.PaperdollArmorCoords
-            local plate = coords[goldenPlateId]
-            local x, y = unpack(plate.Body.XY)
-            -- or:
-            ---- local x = plate.Body.X
-            ---- local y = plate.Body.Y
-            coords[goldenPlateId] = { -- this WOULDN'T work: "plate = {...}", you need to assign key to table directly
-                Body = {X = 50, Y = 30},
-                LeftArm = {x, Y = 30}
-                RightArm = {20, 20}
-            }
-            local coords2 = coords[72]
-            coords2.Body.XY = coords2.Body.X + 20, coords2.Body.Y + 50
-            coords2.RightArm[1] = 88 -- same as XX
-            coords2.LeftArm[2] = plate.Body.Y -- same as Y
-        ]]
-
-        -- default coords for already existing images
-        callWhenGameInitialized(function()
-            local idsByPic = {}
-            for armorId = 66, 78 do
-                local pic = Game.ItemsTxt[armorId].Picture
-                idsByPic[pic:lower()] = armorId
-            end
-
-            for i, item in Game.ItemsTxt do
-                if idsByPic[item.Picture:lower()] then
-                    local index = idsByPic[item.Picture:lower()] - 66
-                    local off = index * 2
-
-                    paperdollArmorCoords[i] = {
-                        Body = {i2[0x4BCDF8 + off], i2[0x4BCE14 + off]},
-                        LeftArm = {i2[0x4BCE30 + off], i2[0x4BCE4C + off]},
-                        RightArm = {i2[0x4BCE68 + off], i2[0x4BCE84 + off]}
-                    }
-
-                    -- fill in default coords from memory for easy modification, but don't use them by default
-                    if i >= 66 and i <= 78 then
-                        paperdollArmorCoords.ClearCustomCoords(i)
-                    end
-                end
-            end
-        end)
-
-        hooks.ref.armorXYbuf = armorXYbuf
-        hooks.ref.armorXYwasSet = armorXYwasSet
-
-        -- armors
-
-        -- correct bitmap id
-        hooks.asmpatch(0x4125C8, [[
-            push ecx
-            mov eax, [ebp+0x1434] ; item armor
-            lea ecx, [eax * 8]
-            sub ecx, eax
-            mov eax, [ebp+ecx*4+0x128] ; item id
-            dec eax
-            lea eax, [eax + eax * 2]
-            mov edi, [eax * 4 + %armors%]
-            pop ecx
-            test cl, 2
-        ]], 0xA)
-
-        -- show custom armors with indexes other than builtin ones
-        mem.nop(0x4125A7)
-
-        -- armor coords
-        hooks.asmhook(0x4125A9, [[
-            push ecx
-            mov edx, [ebp+0x1434] ; item armor
-            lea ecx, [edx * 8]
-            sub ecx, edx
-            mov edx, [ebp+ecx*4+0x128] ; item id
-            dec edx
-            mov cl, [%armorXYwasSet% + edx]
-            test cl, cl
-            pop ecx
-            je @std
-            lea edx, [edx + edx * 2]
-            movsx edi, word [%armorXYbuf% + edx * 4] ; X
-            movsx edx, word [%armorXYbuf% + edx * 4 + 2] ; Y
-            jmp absolute 0x4125B9
-
-            @std:
-        ]], 0x10)
-
-        -- drawing armored arms
-
-        local patch = [[
-            ; bitmap id
-            push edx
-            add eax, 65 ; now has proper item id - 1
-            lea edx, [eax + eax * 2]
-            mov edi, [%armors% + edx * 4 + %bmpOff%] ; bitmap id
-
-            ; coords
-            mov dl, byte [%armorXYwasSet% + eax]
-            test dl, dl
-            jne @newCoords
-                sub eax, 65
-                movsx ecx,word ptr [eax*2+%defaultXoff%]
-                movsx eax,word ptr [eax*2+%defaultYoff%]
-                jmp @exit
-            @newCoords:
-                lea eax, [eax + eax * 2]
-                movsx ecx,word ptr [eax*4+%armorXYbuf% + %coordsOffY%] ; Y
-                movsx eax,word ptr [eax*4+%armorXYbuf% + %coordsOffX%] ; X
-            @exit:
-            pop edx
-        ]]
-
-        -- left arm
-
-        -- always draw
-        asmpatch(0x412AE1, "test dword [ebp+0x1434], 0xFFFFFFFF", 0x11)
-
-        -- armored arm bitmap id and XY coords
-        table.copy({
-            defaultXoff = 0x4BCE4C,
-            defaultYoff = 0x4BCE30,
-            coordsOffX = 4,
-            coordsOffY = 6,
-            bmpOff = 4,
-        }, hooks.ref, true)
-        hooks.asmpatch(0x412B39, patch, 0x17)
-
-        -- right arm
-
-        table.copy({
-            defaultXoff = 0x4BCE68,
-            defaultYoff = 0x4BCE84,
-            coordsOffX = 8,
-            coordsOffY = 10,
-            bmpOff = 8,
-        }, hooks.ref, true)
-        hooks.asmpatch(0x412B76, patch, 0x17)
-
-        -- belts, correct bitmap id
-        hooks.asmpatch(0x412918, [[
-            mov ebx, [eax * 4 + %belts% - 4]
-        ]], 0x7)
-
-        -- helmets, correct bitmap id
-        hooks.asmpatch(0x412669, [[
-            mov edi, [ecx * 4 + %helmets% - 4]
-        ]], 0x19)
-
-        -- scanline offset is top left pixel address
-        -- value is offset in pixels
-        -- value % Screen.Width (640) is y offset from top, value:div(Screen.Width) is x offset from left
-        -- 0x4CA888 weakest chain armor scanline offset
+    local function getArmorPicsFromName(name)
+        local base = name:match("(.-)icon")
+        assert(base)
+        return base .. "bod", base .. "arm1", base .. "arm2"
     end
+
+    local beltBitmapIds, helmetBitmapIds, armorBitmapIds = StaticAlloc(itemCount * 4), StaticAlloc(itemCount * 4), StaticAlloc(itemCount * 4 * 3)
+    local function process()
+        for i, item in Game.ItemsTxt do
+            if item.EquipStat == const.ItemType.Armor - 1 then
+                local body, arm1, arm2 = getArmorPicsFromName(item.Picture)
+                local baseOff = armorBitmapIds + (i - 1) * 12
+                u4[baseOff] = Game.IconsLod:LoadBitmap(body)
+                u4[baseOff + 4] = Game.IconsLod:LoadBitmap(arm1)
+                u4[baseOff + 8] = Game.IconsLod:LoadBitmap(arm2)
+            elseif item.EquipStat == const.ItemType.Belt - 1 then
+                local name = assert(item.Picture:match("(belt%d+)[abAB]")) .. "b"
+                u4[beltBitmapIds + (i - 1) * 4] = Game.IconsLod:LoadBitmap(name)
+            elseif item.EquipStat == const.ItemType.Helm - 1 then
+                local id = item.Picture:match("he?lm(%d+)")
+                local name
+                if id then
+                    name = "helm" .. id
+                end
+                id = item.Picture:match("hat(%d+)")
+                if id then
+                    name = "hat" .. id .. "b"
+                end
+                if not name then
+                    name = assert(item.Picture:match("(crown%d+)")) .. "b"
+                end
+                u4[helmetBitmapIds + (i - 1) * 4] = Game.IconsLod:LoadBitmap(name)
+            end
+        end
+    end
+
+    callWhenGameInitialized(process)
+
+    local hooks = HookManager{belts = beltBitmapIds, helmets = helmetBitmapIds, armors = armorBitmapIds}
+
+    -- armors
+
+    -- checkIndex function for automatic erroring if index is invalid, with stack level to error on, increase by 1 inside
+    local armorXYbuf = StaticAlloc(itemCount * 3 * 2 * 2) -- body and both arms
+    local armorXYwasSet = StaticAlloc(itemCount * 1)
+    local paperdollArmorCoords = {}
+    function paperdollArmorCoords.ClearCustomCoords(id)
+        u1[armorXYwasSet + id - 1] = 0
+    end
+    local function makeCoordsAccessor(itemId, offset)
+        return setmetatable({}, {
+            __index = function(_, what)
+                what = type(what) == "string" and what:lower() or what
+                local x, y = i2[armorXYbuf + (itemId - 1) * 12 + offset], i2[armorXYbuf + (itemId - 1) * 12 + offset + 2]
+                if what == "x" or what == 1 then
+                    return x
+                elseif what == "y" or what == 2 then
+                    return y
+                elseif what == "xy" then
+                    return {x, y}
+                end
+            end,
+            __newindex = function (_, what, val)
+                what = type(what) == "string" and what:lower() or what
+                u1[armorXYwasSet + itemId - 1] = 1
+                local xoff, yoff = armorXYbuf + (itemId - 1) * 12 + offset, armorXYbuf + (itemId - 1) * 12 + offset + 2
+                if what == "x" or what == 1 then
+                    i2[xoff] = val
+                elseif what == "y" or what == 2 then
+                    i2[yoff] = val
+                elseif what == "xy" then
+                    i2[xoff], i2[yoff] = val[1], val[2]
+                end
+            end
+        })
+    end
+    do
+        local accessorsCache = {}
+        setmetatable(paperdollArmorCoords, {
+            __index = function(self, itemId)
+                local ret = accessorsCache[itemId]
+                if not ret then
+                    ret = {Body = makeCoordsAccessor(itemId, 0), LeftArm = makeCoordsAccessor(itemId, 4), RightArm = makeCoordsAccessor(itemId, 8)}
+                    ret[1], ret[2], ret[3] = ret.Body, ret.LeftArm, ret.RightArm
+                    accessorsCache[itemId] = ret
+                end
+                -- rawset(self, itemId, ret) -- no rawset to make newindex work, use caching instead
+                return ret
+            end,
+            __newindex = function(self, itemId, val)
+                for i, arrName in ipairs{"Body", "LeftArm", "RightArm"} do
+                    local a = self[itemId][arrName]
+                    local innerVal = val[arrName] or val[i]
+                    for k, v in pairs(innerVal) do
+                        a[k] = v
+                    end
+                end
+            end
+        })
+    end
+    evt.PaperdollArmorCoords = paperdollArmorCoords
+    --[[
+        example usage:
+        local goldenPlateId = 78
+        local coords = evt.PaperdollArmorCoords
+        local plate = coords[goldenPlateId]
+        local x, y = unpack(plate.Body.XY)
+        -- or:
+        ---- local x = plate.Body.X
+        ---- local y = plate.Body.Y
+        coords[goldenPlateId] = { -- this WOULDN'T work: "plate = {...}", you need to assign key to table directly
+            Body = {X = 50, Y = 30},
+            LeftArm = {x, Y = 30}
+            RightArm = {20, 20}
+        }
+        local coords2 = coords[72]
+        coords2.Body.XY = coords2.Body.X + 20, coords2.Body.Y + 50
+        coords2.RightArm[1] = 88 -- same as XX
+        coords2.LeftArm[2] = plate.Body.Y -- same as Y
+    ]]
+
+    -- default coords for already existing images
+    callWhenGameInitialized(function()
+        local idsByPic = {}
+        for armorId = 66, 78 do
+            local pic = Game.ItemsTxt[armorId].Picture
+            idsByPic[pic:lower()] = armorId
+        end
+
+        for i, item in Game.ItemsTxt do
+            if idsByPic[item.Picture:lower()] then
+                local index = idsByPic[item.Picture:lower()] - 66
+                local off = index * 2
+
+                paperdollArmorCoords[i] = {
+                    Body = {i2[0x4BCDF8 + off], i2[0x4BCE14 + off]},
+                    LeftArm = {i2[0x4BCE30 + off], i2[0x4BCE4C + off]},
+                    RightArm = {i2[0x4BCE68 + off], i2[0x4BCE84 + off]}
+                }
+
+                -- fill in default coords from memory for easy modification, but don't use them by default
+                if i >= 66 and i <= 78 then
+                    paperdollArmorCoords.ClearCustomCoords(i)
+                end
+            end
+        end
+    end)
+
+    hooks.ref.armorXYbuf = armorXYbuf
+    hooks.ref.armorXYwasSet = armorXYwasSet
+
+    -- armors
+
+    -- correct bitmap id
+    hooks.asmpatch(0x4125C8, [[
+        push ecx
+        mov eax, [ebp+0x1434] ; item armor
+        lea ecx, [eax * 8]
+        sub ecx, eax
+        mov eax, [ebp+ecx*4+0x128] ; item id
+        dec eax
+        lea eax, [eax + eax * 2]
+        mov edi, [eax * 4 + %armors%]
+        pop ecx
+        test cl, 2
+    ]], 0xA)
+
+    -- show custom armors with indexes other than builtin ones
+    mem.nop(0x4125A7)
+
+    -- armor coords
+    hooks.asmhook(0x4125A9, [[
+        push ecx
+        mov edx, [ebp+0x1434] ; item armor
+        lea ecx, [edx * 8]
+        sub ecx, edx
+        mov edx, [ebp+ecx*4+0x128] ; item id
+        dec edx
+        mov cl, [%armorXYwasSet% + edx]
+        test cl, cl
+        pop ecx
+        je @std
+        lea edx, [edx + edx * 2]
+        movsx edi, word [%armorXYbuf% + edx * 4] ; X
+        movsx edx, word [%armorXYbuf% + edx * 4 + 2] ; Y
+        jmp absolute 0x4125B9
+
+        @std:
+    ]], 0x10)
+
+    -- drawing armored arms
+
+    local patch = [[
+        ; bitmap id
+        push edx
+        add eax, 65 ; now has proper item id - 1
+        lea edx, [eax + eax * 2]
+        mov edi, [%armors% + edx * 4 + %bmpOff%] ; bitmap id
+
+        ; coords
+        mov dl, byte [%armorXYwasSet% + eax]
+        test dl, dl
+        jne @newCoords
+            sub eax, 65
+            movsx ecx,word ptr [eax*2+%defaultXoff%]
+            movsx eax,word ptr [eax*2+%defaultYoff%]
+            jmp @exit
+        @newCoords:
+            lea eax, [eax + eax * 2]
+            movsx ecx,word ptr [eax*4+%armorXYbuf% + %coordsOffY%] ; Y
+            movsx eax,word ptr [eax*4+%armorXYbuf% + %coordsOffX%] ; X
+        @exit:
+        pop edx
+    ]]
+
+    -- left arm
+
+    -- always draw
+    asmpatch(0x412AE1, "test dword [ebp+0x1434], 0xFFFFFFFF", 0x11)
+
+    -- armored arm bitmap id and XY coords
+    table.copy({
+        defaultXoff = 0x4BCE4C,
+        defaultYoff = 0x4BCE30,
+        coordsOffX = 4,
+        coordsOffY = 6,
+        bmpOff = 4,
+    }, hooks.ref, true)
+    hooks.asmpatch(0x412B39, patch, 0x17)
+
+    -- right arm
+
+    table.copy({
+        defaultXoff = 0x4BCE68,
+        defaultYoff = 0x4BCE84,
+        coordsOffX = 8,
+        coordsOffY = 10,
+        bmpOff = 8,
+    }, hooks.ref, true)
+    hooks.asmpatch(0x412B76, patch, 0x17)
+
+    -- belts, correct bitmap id
+    hooks.asmpatch(0x412918, [[
+        mov ebx, [eax * 4 + %belts% - 4]
+    ]], 0x7)
+
+    -- helmets, correct bitmap id
+    hooks.asmpatch(0x412669, [[
+        mov edi, [ecx * 4 + %helmets% - 4]
+    ]], 0x19)
+
+    -- scanline offset is top left pixel address
+    -- value is offset in pixels
+    -- value % Screen.Width (640) is y offset from top, value:div(Screen.Width) is x offset from left
+    -- 0x4CA888 weakest chain armor scanline offset
 end
 
 function setMiscItemHooks(itemCount, enchantmentDataOffset)
@@ -1130,7 +1126,7 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
 
     -- this function binds game array with my custom array for some sort of sums, so that updating relevant fields in structures automatically updates chances in new arrays
     local function bindHandlerWithItemDataArray(t) -- (changedElement, size, memArr, bindTo, firstIndex, isArray)
-        local size, memArr, bindTo, firstIndex, array = t.size, t.memArr, t.bindTo, t.firstIndex, t.array
+        local size, memArr, bindTo, firstIndex, array = t.size, t.memArr, t.bindTo, t.firstIndex or 0, t.array
         local members, mname, arrayOrigin = t.members, t.mname, t.arrayOrigin
         callWhenGameInitialized(function()
             -- note: "obj" argument doesn't always refer to base structure, it can refer to arrays, member structs (that contain given member) etc.
@@ -1141,13 +1137,13 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
                 oldHandler = assert(members[mname])
             end
             local function myHandler(o, obj, name, val, ...)
-                --debug.Message(o:tohex(), obj["?ptr"]:tohex(), name, val)
+                --if val ~= nil then debug.Message(o:tohex(), obj["?ptr"]:tohex(), name, val) end
                 local old = memArr[obj["?ptr"] + o]
                 local ret = oldHandler(o, obj, name, val, ...)
                 if val ~= nil then
                     local new = memArr[obj["?ptr"] + o]
                     if new ~= old then
-                        local index = array and (o / size) or (o - arrayOrigin) / size
+                        local index = array and (o / size) or ((o - arrayOrigin) / size)
                         index = index + firstIndex
                         bindTo[index] = bindTo[index] + (new - old)
                     end
@@ -1163,11 +1159,15 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
     end
 
     local rndItemsChanceSums = makeMemoryTogglerTable{arr = u4, size = 4, buf = enchantmentDataOffset,
-        minIndex = 1, maxIndex = 6, errorFormat = "Valid indexes are from %d to %d"}
+        minIndex = 1, maxIndex = 6}
     evt.RndItemsChanceSums = rndItemsChanceSums
 
     bindHandlerWithItemDataArray{array = structs.m.ItemsTxtItem.ChanceByLevel, size = 1, memArr = u1, bindTo = rndItemsChanceSums, firstIndex = 1}
 
+    -- evt.RndItemsBonusChanceByLevel[5].Standard = 50
+    -- evt.RndItemsBonusChanceByLevel[2].Special = 50
+    -- local per = evt.RndItemsBonusChanceByLevel[6].SpecialPercentage
+    -- evt.RndItemsBonusChanceByLevel[6].SpecialPercentage = per + 12
     do
         local sums = enchantmentDataOffset + 0x18
         local function getOffset(key)
@@ -1192,13 +1192,12 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
     end
 
     do
-        local sums = makeMemoryTogglerTable{arr = u4, size = 4, buf = enchantmentDataOffset + 0x60,
-        minIndex = 1, maxIndex = 9, "Valid indexes are from %d to %d"}
+        local sums = makeMemoryTogglerTable{arr = u4, size = 4, buf = enchantmentDataOffset + 0x60, minIndex = 0, maxIndex = 8}
         evt.StdBonusChanceSums = sums
         local members = structs.m.StdItemsTxtItem
-        bindHandlerWithItemDataArray{array = members.ChanceForSlot, size = 1, memArr = u1, bindTo = sums, firstIndex = 1}
+        bindHandlerWithItemDataArray{array = members.ChanceForSlot, size = 1, memArr = u1, bindTo = sums}
         for _, mname in ipairs{"Arm", "Shld", "Helm", "Belt", "Cape", "Gaunt", "Boot", "Ring", "Amul"} do
-            bindHandlerWithItemDataArray{members = members, mname = mname, size = 1, memArr = u1, bindTo = sums, firstIndex = 1,
+            bindHandlerWithItemDataArray{members = members, mname = mname, size = 1, memArr = u1, bindTo = sums,
                 arrayOrigin = structs.o.StdItemsTxtItem.ChanceForSlot}
         end
     end
@@ -1238,19 +1237,14 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
         end})
     end
 
-    -- evt.StdBonusStrengthRanges allows you to change default bonuses power. Table is indexed first by treasure level (1-6) and then by either 0 or 1 (lower or upper bound). When you simply index it, you get current value. When you assign to it, that range bound is modified (note that no checks are made for invalid ranges, they might crash the game). You can also assign an array with two fields to set both range ends at once.
-    -- examples:
-    --[[
-        -- TODO: Low, End, LowEnd fields, newindex, index etc.
-    ]]
     do
         local sums = makeMemoryTogglerTable{arr = u4, size = 4, buf = enchantmentDataOffset + 0xB4,
-        minIndex = 1, maxIndex = 12, errorFormat = "Valid indexes are from %d to %d"}
+        minIndex = 0, maxIndex = 11}
         evt.SpcBonusChanceSums = sums
         local members = structs.m.SpcItemsTxtItem
-        bindHandlerWithItemDataArray{array = members.ChanceForSlot, size = 1, memArr = u1, bindTo = sums, firstIndex = 1}
+        bindHandlerWithItemDataArray{array = members.ChanceForSlot, size = 1, memArr = u1, bindTo = sums}
         for _, mname in ipairs{"W1", "W2", "Miss", "Arm", "Shld", "Helm", "Belt", "Cape", "Gaunt", "Boot", "Ring", "Amul"} do
-            bindHandlerWithItemDataArray{members = members, mname = mname, size = 1, memArr = u1, bindTo = sums, firstIndex = 1,
+            bindHandlerWithItemDataArray{members = members, mname = mname, size = 1, memArr = u1, bindTo = sums,
                 arrayOrigin = structs.o.SpcItemsTxtItem.ChanceForSlot}
         end
     end
@@ -1262,7 +1256,7 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
         mem.fill(buf, 400, 1) -- normal items
         mem.fill(buf + 400, itemCount - 400, 0) -- artifacts and quest items and after
         local canBeFound = makeMemoryTogglerTable{buf = buf, arr = u1, size = 1, minIndex = 1, maxIndex = itemCount,
-            bool = true, errorFormat = "Invalid item id (range: [%d %d])"}
+            bool = true}
         -- if value at index idx is 0, item idx cannot be generated (artifacts and quest items by default), otherwise it can
         evt.CanItemBeRandomlyFound = canBeFound
         HookManager{
@@ -1379,6 +1373,43 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
         local r = secondHookFunc(d, def, itemPtr)
         identifiedItemNameHooks.Switch(true)
         return r
+    end)
+
+    -- tests
+    callWhenGameInitialized(function()
+        for _, itemIndex in ipairs{3, 24, 53, 71, 80, 200, 222, 223, 321, 360, 450} do
+
+        end
+
+        local std, spc = Game.StdItemsTxt, Game.SpcItemsTxt
+        -- 1. test std/spc arrays
+        -- FIXME: doesn't test "Arm" etc., only arrays
+        for _, arr in ipairs{std, spc} do
+            local isStd = arr == std
+            local count = isStd and 9 or 12
+            for _, slot in ipairs{0, 2, 3, 5, 6, count - 1} do
+                local maxEnch = arr.High
+                for _, enchId in ipairs{1, 3, 6, 7, 11, 13, maxEnch - 1, maxEnch} do
+                    local entry = arr[enchId]
+                    local myArr = isStd and evt.StdBonusChanceSums or evt.SpcBonusChanceSums
+                    for _, val in ipairs{5, 12, 33, -20, -4, 11, 23, 45, -32, 0, 3, -1, 1} do
+                        local myVal = myArr[slot]
+                        local oldChance = entry.ChanceForSlot[slot]
+                        entry.ChanceForSlot[slot] = oldChance + val
+                        assert(myVal + val == myArr[slot],
+                            format("[%s, %s] Slot (%d), enchId (%d): old value %d after adding %d doesn't match expected (%d)",
+                                isStd and "StdItemsTxt" or "SpcItemsTxt", "my array", slot, enchId, myVal, val, myVal + val
+                            )
+                        )
+                        assert(entry.ChanceForSlot[slot] == oldChance + val,
+                            format("[%s, %s] Slot (%d), enchId (%d): old value %d after adding %d doesn't match expected (%d)",
+                                isStd and "StdItemsTxt" or "SpcItemsTxt", "MMExt array", slot, enchId, myVal, val, myVal + val
+                            )
+                        )
+                    end
+                end
+            end
+        end
     end)
 end
 
