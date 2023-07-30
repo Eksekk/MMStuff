@@ -1130,28 +1130,57 @@ do
             minIndex = 1, maxIndex = 6, errorFormat = "Valid indexes are from %d to %d"}
         evt.RndItemsChanceSums = rndItemsChanceSums
 
-        local function bindHandlerWithItemDataArray(changedArray, size, memArr, bindTo, firstIndex)
-            -- note: "obj" argument doesn't always refer to base structure, it can refer to array, member struct etc.
-            local oldHandler = internal.GetArrayUpval(changedArray, "f")
-            local function myHandler(o, obj, name, val, ...)
-                --debug.Message(o:tohex(), obj["?ptr"]:tohex(), name, val)
-                local old = memArr[obj["?ptr"] + o]
-                local ret = oldHandler(o, obj, name, val, ...)
-                if val ~= nil then
-                    local new = memArr[obj["?ptr"] + o]
-                    if new ~= old then
-                        local index = o / size + firstIndex
-                        bindTo[index] = bindTo[index] + (new - old)
-                    end
+        -- this function binds game array with my custom array for some sort of chance sums, so that updating relevant fields in structures automatically updates chances
+        local function bindHandlerWithItemDataArray(t) -- (changedElement, size, memArr, bindTo, firstIndex, isArray)
+            local size, memArr, bindTo, firstIndex, array = t.size, t.memArr, t.bindTo, t.firstIndex, t.array
+            local members, mname, arrayOrigin = t.members, t.mname, t.arrayOrigin
+            callWhenGameInitialized(function()
+                -- note: "obj" argument doesn't always refer to base structure, it can refer to arrays, member structs (that contain given member) etc.
+                local handlerUpvalId, oldHandler
+                if array then
+                    handlerUpvalId, oldHandler = debug.findupvalue(array, "f")
+                else
+                    oldHandler = assert(members[mname])
                 end
-                return ret
-            end
-            internal.SetArrayUpval(changedArray, "f", myHandler)
+                local function myHandler(o, obj, name, val, ...)
+                    --debug.Message(o:tohex(), obj["?ptr"]:tohex(), name, val)
+                    local old = memArr[obj["?ptr"] + o]
+                    local ret = oldHandler(o, obj, name, val, ...)
+                    if val ~= nil then
+                        local new = memArr[obj["?ptr"] + o]
+                        if new ~= old then
+                            local index = array and (o / size) or (o - arrayOrigin) / size
+                            index = index + firstIndex
+                            bindTo[index] = bindTo[index] + (new - old)
+                        end
+                    end
+                    return ret
+                end
+                if array then
+                    debug.setupvalue(array, handlerUpvalId, myHandler)
+                else
+                    members[mname] = myHandler
+                end
+            end)
         end
-        
-        callWhenGameInitialized(function()
-            bindHandlerWithItemDataArray(Game.ItemsTxt[1].ChanceByLevel, 1, u1, rndItemsChanceSums, 1)
-        end)
+
+        --[[
+            evt.StdItemsChanceSums
+  nil
+> evt.StdBonusChanceSums
+  (table: 0x042a8b38)
+> evt.StdBonusChanceSums[1]
+  115
+> Game.StdItemsTxt[5]
+  (table: 0x0449dd70)
+> Game.StdItemsTxt[5].W1
+  nil
+> Game.StdItemsTxt[5].Arm
+  5
+> Game.StdItemsTxt[5].Arm = 20
+        ]]
+
+        bindHandlerWithItemDataArray{array = structs.m.ItemsTxtItem.ChanceByLevel, size = 1, memArr = u1, bindTo = rndItemsChanceSums, firstIndex = 1}
 
         do
             local sums = enchantmentDataOffset + 0x18
@@ -1174,11 +1203,19 @@ do
                     return tab
                 end
             })
-            -- evt.RndItemsBonusChanceByLevel[3].SpecialPercentage = 50
         end
 
-        evt.StdBonusChanceSums = makeMemoryTogglerTable{arr = u4, size = 4, buf = enchantmentDataOffset + 0x60,
+        do
+            local sums = makeMemoryTogglerTable{arr = u4, size = 4, buf = enchantmentDataOffset + 0x60,
             minIndex = 1, maxIndex = 9, "Valid indexes are from %d to %d"}
+            evt.StdBonusChanceSums = sums
+            local members = structs.m.StdItemsTxtItem
+            bindHandlerWithItemDataArray{array = members.ChanceForSlot, size = 1, memArr = u1, bindTo = sums, firstIndex = 1}
+            for _, mname in ipairs{"Arm", "Shld", "Helm", "Belt", "Cape", "Gaunt", "Boot", "Ring", "Amul"} do
+                bindHandlerWithItemDataArray{members = members, mname = mname, size = 1, memArr = u1, bindTo = sums, firstIndex = 1,
+                    arrayOrigin = structs.o.StdItemsTxtItem.ChanceForSlot}
+            end
+        end
 
         local enchOffset = 0x84
         do
@@ -1190,8 +1227,14 @@ do
                     ret = setmetatable({}, {__index = function(_, j)
                         checkIndex(j, 0, 1, 2)
                         return u4[enchantmentDataOffset + enchOffset + (i - 1) * 8 + j * 4]
-                    end, __newindex = function(_, j, val)
+                    end, __newindex = function(self, j, val)
                         checkIndex(j, 0, 1, 2)
+                        -- commented out, because could break assigning table of values
+                        -- if index == 0 then
+                        --     assert(val <= self[1], "Invalid range (%d-%d)", val, self[1])
+                        -- elseif index == 1 then
+                        --     assert(val >= self[0], "Invalid range (%d-%d)", self[1], val)
+                        -- end
                         u4[enchantmentDataOffset + enchOffset + (i - 1) * 8 + j * 4] = val
                     end})
                     accessorsCache[i] = ret

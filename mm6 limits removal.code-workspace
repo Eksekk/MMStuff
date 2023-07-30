@@ -8,7 +8,10 @@
 			"path": "MM6"
 		},
 		{
-			"path": "../../../Desktop/MM installs/Might and Magic 6 skill emphasis mod"
+			"path": "../../../Desktop/MM installs/Might and Magic 6 skill emphasis mod/Scripts"
+		},
+		{
+			"path": "../MMExtension"
 		}
 	],
 	"settings": {}
