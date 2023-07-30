@@ -1129,25 +1129,28 @@ do
         local rndItemsChanceSums = makeMemoryTogglerTable{arr = u4, size = 4, buf = enchantmentDataOffset,
             minIndex = 1, maxIndex = 6, errorFormat = "Valid indexes are from %d to %d"}
         evt.RndItemsChanceSums = rndItemsChanceSums
-        
-        callWhenGameInitialized(function()
-            local x = Game.ItemsTxt[1].ChanceByLevel[1] -- to generate arrays
+
+        local function bindHandlerWithItemDataArray(changedArray, size, memArr, bindTo, firstIndex)
             -- note: "obj" argument doesn't always refer to base structure, it can refer to array, member struct etc.
-            local oldHandler = internal.GetArrayUpval(Game.ItemsTxt[1].ChanceByLevel, "f")
-            local function myChanceByLevelHandler(o, obj, name, val, ...)
+            local oldHandler = internal.GetArrayUpval(changedArray, "f")
+            local function myHandler(o, obj, name, val, ...)
                 --debug.Message(o:tohex(), obj["?ptr"]:tohex(), name, val)
-                local old = u1[obj["?ptr"] + o]
+                local old = memArr[obj["?ptr"] + o]
                 local ret = oldHandler(o, obj, name, val, ...)
                 if val ~= nil then
-                    local new = u1[obj["?ptr"] + o]
+                    local new = memArr[obj["?ptr"] + o]
                     if new ~= old then
-                        local treasureLevel = o + 1
-                        rndItemsChanceSums[treasureLevel] = rndItemsChanceSums[treasureLevel] + (new - old)
+                        local index = o / size + firstIndex
+                        bindTo[index] = bindTo[index] + (new - old)
                     end
                 end
                 return ret
             end
-            internal.SetArrayUpval(Game.ItemsTxt[1].ChanceByLevel, "f", myChanceByLevelHandler)
+            internal.SetArrayUpval(changedArray, "f", myHandler)
+        end
+        
+        callWhenGameInitialized(function()
+            bindHandlerWithItemDataArray(Game.ItemsTxt[1].ChanceByLevel, 1, u1, rndItemsChanceSums, 1)
         end)
 
         do
