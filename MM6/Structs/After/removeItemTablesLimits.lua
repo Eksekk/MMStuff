@@ -36,7 +36,7 @@ end
     
 local function makeMemoryTogglerTable(t)
     local arr, buf, minIndex, maxIndex = t.arr, t.buf, t.minIndex, t.maxIndex
-    local bool, errorFormat, size = t.bool or true, t.errorFormat, t.size
+    local bool, errorFormat, size = t.bool, t.errorFormat, t.size
     local mt = {__index = function(_, i)
         if i < minIndex or i > maxIndex then
             error(format(errorFormat, minIndex, maxIndex), 2)
@@ -71,19 +71,32 @@ end
     5) test and fix all bugs you can find
 ]]
 
+local function getSlot(player)
+    for i, pl in Party do
+        if pl == player then
+            return i
+        end
+    end
+end
+
 local function getSpellQueueData(spellQueuePtr, targetPtr)
 	local t = {Spell = i2[spellQueuePtr], Caster = Party.PlayersArray[i2[spellQueuePtr + 2]]}
 	t.SpellSchool = ceil(t.Spell / 11)
 	local flags = u2[spellQueuePtr + 8]
 	if flags:And(0x10) ~= 0 then -- caster is target
-		t.Caster = Party.PlayersArray[i2[spellQueuePtr + 4]]
+		t.Caster = Party[i2[spellQueuePtr + 4]]
 	end
+    t.CasterIndex = getSlot(t.Caster)
 
 	if flags:And(1) ~= 0 then
 		t.FromScroll = true
 		t.Skill, t.Mastery = SplitSkill(u2[spellQueuePtr + 0xA])
 	else
-		t.Skill, t.Mastery = SplitSkill(t.Caster:GetSkill(const.Skills.Fire + t.SpellSchool - 1))
+		if mmver > 6 then
+			t.Skill, t.Mastery = SplitSkill(t.Caster:GetSkill(const.Skills.Fire + t.SpellSchool - 1))
+		else -- no GetSkill
+			t.Skill, t.Mastery = SplitSkill(t.Caster.Skills[const.Skills.Fire + t.SpellSchool - 1])
+		end
 	end
 
 	local targetIdKey = mmv("TargetIndex", "TargetIndex", "TargetRosterId")
@@ -559,8 +572,7 @@ do
         end
 
         -- needed: old and new relative data start addresses (to compute relative offset, (newBegin - newRelativeBegin) - (old begin - oldRelativeBegin))
-        debug.Message(format("items %d, std %d, spc %d, potion %d", itemCount, stdItemCount, spcItemCount, potionTxtCount),
-            format("size item %d, std %d, spc %d, potion %d, full %d", itemsSize, stdItemsSize, spcItemsSize, potionTxtSize, itemsSize + stdItemsSize + spcItemsSize + potionTxtSize + 0x3A43))
+        -- debug.Message(format("items %d, std %d, spc %d, potion %d", itemCount, stdItemCount, spcItemCount, potionTxtCount), format("size item %d, std %d, spc %d, potion %d, full %d", itemsSize, stdItemsSize, spcItemsSize, potionTxtSize, itemsSize + stdItemsSize + spcItemsSize + potionTxtSize + 0x3A43))
 
         local itemDataBegin = 0x560C10
         
@@ -792,6 +804,12 @@ do
         -- 0x44A6E1 contains last artifact index
 
         -- asmpatch(0x4497F9, "cmp edi," .. itemCount)
+
+        -- random items from all treasure levels
+        -- for i = 1, 6 do for j = 1, 30 do evt.GiveItem{Strength = i} end end
+
+        -- random items of 5th level
+        -- for j = 1, 300 do evt.GiveItem{Strength = 5} end
 
         setItemDrawingHooks()
 
@@ -1108,8 +1126,29 @@ do
             -- [0xB4] spc item bonus chances (column sums): 0x56AB90, 12 dwords
         ]]
 
-        evt.RndItemsChanceSums = makeMemoryTogglerTable{arr = u4, size = 4, buf = enchantmentDataOffset,
+        local rndItemsChanceSums = makeMemoryTogglerTable{arr = u4, size = 4, buf = enchantmentDataOffset,
             minIndex = 1, maxIndex = 6, errorFormat = "Valid indexes are from %d to %d"}
+        evt.RndItemsChanceSums = rndItemsChanceSums
+        
+        callWhenGameInitialized(function()
+            local x = Game.ItemsTxt[1].ChanceByLevel[1] -- to generate arrays
+            -- note: "obj" argument doesn't always refer to base structure, it can refer to array, member struct etc.
+            local oldHandler = internal.GetArrayUpval(Game.ItemsTxt[1].ChanceByLevel, "f")
+            local function myChanceByLevelHandler(o, obj, name, val, ...)
+                --debug.Message(o:tohex(), obj["?ptr"]:tohex(), name, val)
+                local old = u1[obj["?ptr"] + o]
+                local ret = oldHandler(o, obj, name, val, ...)
+                if val ~= nil then
+                    local new = u1[obj["?ptr"] + o]
+                    if new ~= old then
+                        local treasureLevel = o + 1
+                        rndItemsChanceSums[treasureLevel] = rndItemsChanceSums[treasureLevel] + (new - old)
+                    end
+                end
+                return ret
+            end
+            internal.SetArrayUpval(Game.ItemsTxt[1].ChanceByLevel, "f", myChanceByLevelHandler)
+        end)
 
         do
             local sums = enchantmentDataOffset + 0x18
@@ -1132,37 +1171,52 @@ do
                     return tab
                 end
             })
+            -- evt.RndItemsBonusChanceByLevel[3].SpecialPercentage = 50
         end
 
         evt.StdBonusChanceSums = makeMemoryTogglerTable{arr = u4, size = 4, buf = enchantmentDataOffset + 0x60,
             minIndex = 1, maxIndex = 9, "Valid indexes are from %d to %d"}
 
         local enchOffset = 0x84
-        evt.StdBonusStrengthRanges = setmetatable({}, {__index = function(t, i)
-            assert(i >= 1 and i <= 6, "Invalid treasure level")
-            local ret = setmetatable({}, {__index = function(_, j)
-                assert(j >= 0 and j <= 1, "Invalid index - this table is from 0 to 1")
-                return u4[enchantmentDataOffset + enchOffset + (i - 1) * 8 + j * 4]
-            end, __newindex = function(_, j, val)
-                assert(j >= 0 and j <= 1, "Invalid index - this table is from 0 to 1")
-                u4[enchantmentDataOffset + enchOffset + (i - 1) * 8 + j * 4] = val
+        do
+            local accessorsCache = {}
+            evt.StdBonusStrengthRanges = setmetatable({}, {__index = function(t, i)
+                assert(i >= 1 and i <= 6, "Invalid treasure level")
+                local ret = accessorsCache[i]
+                if not ret then
+                    ret = setmetatable({}, {__index = function(_, j)
+                        checkIndex(j, 0, 1, 2)
+                        return u4[enchantmentDataOffset + enchOffset + (i - 1) * 8 + j * 4]
+                    end, __newindex = function(_, j, val)
+                        checkIndex(j, 0, 1, 2)
+                        u4[enchantmentDataOffset + enchOffset + (i - 1) * 8 + j * 4] = val
+                    end})
+                    accessorsCache[i] = ret
+                end
+                return ret
+            end,
+            __newindex = function(t, i, val)
+                if type(val) ~= "table" then
+                    error("Table value expected", 2)
+                elseif #val < 2 then
+                    error("Table must have at least 2 values, starting from index 1", 2)
+                end
+                t[i][0] = val[1]
+                t[i][1] = val[2]
             end})
-            rawset(t, i, ret)
-            return ret
-        end, __newindex = function(t, i, val)
-            if type(val) ~= "table" then
-                error("Table value expected", 2)
-            elseif #val < 2 then
-                error("Table must have at least 2 values, starting from index 1", 2)
-            end
-            t[i][0] = val[1]
-            t[i][1] = val[2]
-        end})
+        end
+
+        -- evt.StdBonusStrengthRanges allows you to change default bonuses power. Table is indexed first by treasure level (1-6) and then by either 0 or 1 (lower or upper bound). When you simply index it, you get current value. When you assign to it, that range bound is modified (note that no checks are made for invalid ranges, they might crash the game). You can also assign an array with two fields to set both range ends at once.
+        -- examples:
+        --[[
+            -- TODO: Low, End, LowEnd fields, newindex, index etc.
+        ]]
 
         evt.SpcBonusChanceSums = makeMemoryTogglerTable{arr = u4, size = 4, buf = enchantmentDataOffset + 0xB4,
             minIndex = 1, maxIndex = 12, errorFormat = "Valid indexes are from %d to %d"}
 
         -- can item be generated, TODO: patch all instances
+        -- some unpatched: evt.GiveItem
         do
             local buf = StaticAlloc(itemCount)
             mem.fill(buf, 400, 1) -- normal items
@@ -1457,8 +1511,8 @@ do
         hooks.asmhook(0x41CB20, [[
             ; sprintf to get text
             ; put it where bonus text is put on stack (if first byte is not 0, it will be printed automatically)
-            ; ecx = items txt entry ptr, ebx = item ptr
-            ; FIXME: crashes
+            ; [esp + 0x10] = items txt entry ptr, ebx = item ptr
+            mov ecx, [esp + 0x10]
             cmp byte [ecx + 0x14], 0xE ; potion bottle
             jne @std
             mov eax, [ebx + 4] ; bonus (power)
