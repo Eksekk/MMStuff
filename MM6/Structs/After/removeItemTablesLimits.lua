@@ -51,7 +51,9 @@ end
 local function makeMemoryTogglerTable(t)
     local arr, buf, minIndex, maxIndex = t.arr, t.buf, t.minIndex, t.maxIndex
     local bool, errorFormat, size, minValue, maxValue = t.bool, t.errorFormat, t.size, t.minValue, t.maxValue
+    local aliases = t.aliases or {} -- string aliases for some indexes
     local mt = {__index = function(_, i)
+        i = aliases[i] or i 
         checkIndex(i, minIndex, maxIndex, 2, errorFormat)
         local off = buf + (i - minIndex) * size
         if bool then
@@ -61,6 +63,7 @@ local function makeMemoryTogglerTable(t)
         end
     end,
     __newindex = function (_, i, val)
+        i = aliases[i] or i
         checkIndex(i, minIndex, maxIndex, 2, errorFormat)
         local off = buf + (i - minIndex) * size
         if bool then
@@ -1125,7 +1128,7 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
     ]]
 
     -- this function binds game array with my custom array for some sort of sums, so that updating relevant fields in structures automatically updates chances in new arrays
-    local function bindHandlerWithItemDataArray(t) -- (changedElement, size, memArr, bindTo, firstIndex, isArray)
+    local function bindHandlerWithItemDataArray(t)
         local size, memArr, bindTo, firstIndex, array = t.size, t.memArr, t.bindTo, t.firstIndex or 0, t.array
         local members, mname, arrayOrigin = t.members, t.mname, t.arrayOrigin
         callWhenGameInitialized(function()
@@ -1137,7 +1140,7 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
                 oldHandler = assert(members[mname])
             end
             local function myHandler(o, obj, name, val, ...)
-                --if val ~= nil then debug.Message(o:tohex(), obj["?ptr"]:tohex(), name, val) end
+                -- if val ~= nil then debug.Message(o:tohex(), obj["?ptr"]:tohex(), name, val, arrayOrigin) end
                 local old = memArr[obj["?ptr"] + o]
                 local ret = oldHandler(o, obj, name, val, ...)
                 if val ~= nil then
@@ -1191,12 +1194,23 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
         })
     end
 
+    local stdBonusSlotNames = {Arm = 3, Shld = 4, Helm = 5, Belt = 6, Cape = 7, Gaunt = 8, Boot = 9, Ring = 10, Amul = 11}
+    local spcBonusSlotNames = table.copy(stdBonusSlotNames)
+    table.copy({
+        W1 = 0, W2 = 1, Miss = 2
+    }, spcBonusSlotNames, true)
+    for k, v in pairs(stdBonusSlotNames) do
+        stdBonusSlotNames[k] = v - 3 -- std bonuses don't use three lower values
+    end
+    evt.StdBonusSlotNames = stdBonusSlotNames
+    evt.SpcBonusSlotNames = spcBonusSlotNames
+
     do
-        local sums = makeMemoryTogglerTable{arr = u4, size = 4, buf = enchantmentDataOffset + 0x60, minIndex = 0, maxIndex = 8}
+        local sums = makeMemoryTogglerTable{arr = u4, size = 4, buf = enchantmentDataOffset + 0x60, minIndex = 0, maxIndex = 8, aliases = stdBonusSlotNames}
         evt.StdBonusChanceSums = sums
         local members = structs.m.StdItemsTxtItem
         bindHandlerWithItemDataArray{array = members.ChanceForSlot, size = 1, memArr = u1, bindTo = sums}
-        for _, mname in ipairs{"Arm", "Shld", "Helm", "Belt", "Cape", "Gaunt", "Boot", "Ring", "Amul"} do
+        for mname in pairs(stdBonusSlotNames) do
             bindHandlerWithItemDataArray{members = members, mname = mname, size = 1, memArr = u1, bindTo = sums,
                 arrayOrigin = structs.o.StdItemsTxtItem.ChanceForSlot}
         end
@@ -1239,11 +1253,11 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
 
     do
         local sums = makeMemoryTogglerTable{arr = u4, size = 4, buf = enchantmentDataOffset + 0xB4,
-        minIndex = 0, maxIndex = 11}
+        minIndex = 0, maxIndex = 11, aliases = spcBonusSlotNames}
         evt.SpcBonusChanceSums = sums
         local members = structs.m.SpcItemsTxtItem
         bindHandlerWithItemDataArray{array = members.ChanceForSlot, size = 1, memArr = u1, bindTo = sums}
-        for _, mname in ipairs{"W1", "W2", "Miss", "Arm", "Shld", "Helm", "Belt", "Cape", "Gaunt", "Boot", "Ring", "Amul"} do
+        for mname in pairs(spcBonusSlotNames) do
             bindHandlerWithItemDataArray{members = members, mname = mname, size = 1, memArr = u1, bindTo = sums,
                 arrayOrigin = structs.o.SpcItemsTxtItem.ChanceForSlot}
         end
@@ -1376,6 +1390,7 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
     end)
 
     -- tests
+    local slotNames = table.invert(spcBonusSlotNames)
     callWhenGameInitialized(function()
         for _, itemIndex in ipairs{3, 24, 53, 71, 80, 200, 222, 223, 321, 360, 450} do
 
@@ -1389,21 +1404,40 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
             local count = isStd and 9 or 12
             for _, slot in ipairs{0, 2, 3, 5, 6, count - 1} do
                 local maxEnch = arr.High
+                local slotName = slotNames[slot + (std and 3 or 0)] -- std items doesn't use lower 3 slots (weapons and bow)
                 for _, enchId in ipairs{1, 3, 6, 7, 11, 13, maxEnch - 1, maxEnch} do
                     local entry = arr[enchId]
                     local myArr = isStd and evt.StdBonusChanceSums or evt.SpcBonusChanceSums
-                    for _, val in ipairs{5, 12, 33, -20, -4, 11, 23, 45, -32, 0, 3, -1, 1} do
+                    for _, add in ipairs{5, 12, 33, -20, -4, 11, 23, 45, -32, 0, 3, -1, 1} do
                         local myVal = myArr[slot]
                         local oldChance = entry.ChanceForSlot[slot]
-                        entry.ChanceForSlot[slot] = oldChance + val
-                        assert(myVal + val == myArr[slot],
+                        entry.ChanceForSlot[slot] = oldChance + add
+                        assert(myVal + add == myArr[slot],
                             format("[%s, %s] Slot (%d), enchId (%d): old value %d after adding %d doesn't match expected (%d)",
-                                isStd and "StdItemsTxt" or "SpcItemsTxt", "my array", slot, enchId, myVal, val, myVal + val
+                                isStd and "StdItemsTxt" or "SpcItemsTxt", "my array", slot, enchId, myVal, add, myVal + add
                             )
                         )
-                        assert(entry.ChanceForSlot[slot] == oldChance + val,
+                        assert(entry.ChanceForSlot[slot] == oldChance + add,
                             format("[%s, %s] Slot (%d), enchId (%d): old value %d after adding %d doesn't match expected (%d)",
-                                isStd and "StdItemsTxt" or "SpcItemsTxt", "MMExt array", slot, enchId, myVal, val, myVal + val
+                                isStd and "StdItemsTxt" or "SpcItemsTxt", "MMExt array", slot, enchId, myVal, add, myVal + add
+                            )
+                        )
+
+                        -- restore old value
+                        entry.ChanceForSlot[slot] = oldChance
+
+                        -- now do it again, but use slot names
+                        myVal = myArr[slotName]
+                        oldChance = entry[slotName]
+                        entry[slotName] = oldChance + add
+                        assert(myVal + add == myArr[slotName],
+                            format("[%s, %s] Slot name %q, enchId (%d): old value %d after adding %d doesn't match expected (%d)",
+                                isStd and "StdItemsTxt" or "SpcItemsTxt", "my array", slotName, enchId, myVal, add, myVal + add
+                            )
+                        )
+                        assert(entry[slotName] == oldChance + add,
+                            format("[%s, %s] Slot name %q, enchId (%d): old value %d after adding %d doesn't match expected (%d)",
+                                isStd and "StdItemsTxt" or "SpcItemsTxt", "MMExt array", slotName, enchId, myVal, add, myVal + add
                             )
                         )
                     end
