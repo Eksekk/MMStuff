@@ -321,6 +321,8 @@ end
 -- minCols is minimum cell count - if less, function stops reading file and returns current count
 -- if col #needCol is not empty, current count is updated to its index, otherwise nothing is done - meant to exclude empty entries at the end of some files
 
+local setItemDrawingHooks, setMiscItemHooks, setAlchemyHooks
+
 do
 	--[[
 		ItemsTxt:       low = 0x560C14    high = 0x5666DC   size = 0x5AC8     itemSize = 0x28   dataOffset = 0x4 
@@ -412,6 +414,7 @@ do
         [3] = {0x448B00, 0x448C05, 0x448BE9, 0x448CC9, 0x448C10, 0x448B85, 0x448BA1, 0x448C3B, 0x448C9E, 0x448CAA}
     }
     
+    local relativeItemDataRefs -- to silence "undefined global" warning
     -- relative offsets from item data start
     -- local relativeItemDataRefs = {
     --     [2] = {0x448F95, 0x4496C8, 0x449835, 0x44991E, 0x449932, 0x449946, 0x44996B, 0x44997F, 0x449993, 0x4499B8, 0x4499CC, 0x4499E0, 0x449A05, 0x449A19, 0x449A2D, 0x449A4B, 0x449A5C, 0x449A6D, 0x449A8B, 0x449A9C, 0x449AAD, 0x449AFF, 0x449B31, 0x449C32, 0x449C3C, 0x4465DE, 0x449D43, 0x449D75, 0x449EC1, 0x449ECB, 0x449ED5, 0x449EDD, 0x449EF4, 0x44A61B, 0x44A630, 0x44A645, 0x44A65A, 0x44A66F, 0x44A683, 0x44A692, 0x44A69E, 0x448CE7, 0x448D0F, 0x448E04},
@@ -509,8 +512,6 @@ do
         nop
         nop
     ]], 0x1B)
-
-    local setItemDrawingHooks, setMiscItemHooks, setAlchemyHooks
 
     --for i = 1, 100 do Party[0].Items[1]:Randomize(6) end
     hook(mem.findcode(addr, NOP), function(d)
@@ -1116,507 +1117,517 @@ do
         -- value % Screen.Width (640) is y offset from top, value:div(Screen.Width) is x offset from left
         -- 0x4CA888 weakest chain armor scanline offset
     end
+end
 
-    function setMiscItemHooks(itemCount, enchantmentDataOffset)
-        --[[
-            -- [0] sum of all item chances for each of 6 treasure levels from rnditems.txt (0x56AADC, 6 dwords)
-            -- [0x18] bonus chance by level from rnditems.txt (dword, level 1-6): standard, special, special% : 0x56AAF4, 18 dwords
-            -- [0x60] std item bonus chances (column sums) : 0x56AB3C, 9 dwords
-            -- [0x84] std bonus strength ranges: [min, max] for each treasure level: 0x56AB60, 12 dwords
-            -- [0xB4] spc item bonus chances (column sums): 0x56AB90, 12 dwords
-        ]]
+function setMiscItemHooks(itemCount, enchantmentDataOffset)
+    --[[
+        -- [0] sum of all item chances for each of 6 treasure levels from rnditems.txt (0x56AADC, 6 dwords)
+        -- [0x18] bonus chance by level from rnditems.txt (dword, level 1-6): standard, special, special% : 0x56AAF4, 18 dwords
+        -- [0x60] std item bonus chances (column sums) : 0x56AB3C, 9 dwords
+        -- [0x84] std bonus strength ranges: [min, max] for each treasure level: 0x56AB60, 12 dwords
+        -- [0xB4] spc item bonus chances (column sums): 0x56AB90, 12 dwords
+    ]]
 
-        local rndItemsChanceSums = makeMemoryTogglerTable{arr = u4, size = 4, buf = enchantmentDataOffset,
-            minIndex = 1, maxIndex = 6, errorFormat = "Valid indexes are from %d to %d"}
-        evt.RndItemsChanceSums = rndItemsChanceSums
-
-        -- this function binds game array with my custom array for some sort of chance sums, so that updating relevant fields in structures automatically updates chances
-        local function bindHandlerWithItemDataArray(t) -- (changedElement, size, memArr, bindTo, firstIndex, isArray)
-            local size, memArr, bindTo, firstIndex, array = t.size, t.memArr, t.bindTo, t.firstIndex, t.array
-            local members, mname, arrayOrigin = t.members, t.mname, t.arrayOrigin
-            callWhenGameInitialized(function()
-                -- note: "obj" argument doesn't always refer to base structure, it can refer to arrays, member structs (that contain given member) etc.
-                local handlerUpvalId, oldHandler
-                if array then
-                    handlerUpvalId, oldHandler = debug.findupvalue(array, "f")
-                else
-                    oldHandler = assert(members[mname])
-                end
-                local function myHandler(o, obj, name, val, ...)
-                    --debug.Message(o:tohex(), obj["?ptr"]:tohex(), name, val)
-                    local old = memArr[obj["?ptr"] + o]
-                    local ret = oldHandler(o, obj, name, val, ...)
-                    if val ~= nil then
-                        local new = memArr[obj["?ptr"] + o]
-                        if new ~= old then
-                            local index = array and (o / size) or (o - arrayOrigin) / size
-                            index = index + firstIndex
-                            bindTo[index] = bindTo[index] + (new - old)
-                        end
+    -- this function binds game array with my custom array for some sort of sums, so that updating relevant fields in structures automatically updates chances in new arrays
+    local function bindHandlerWithItemDataArray(t) -- (changedElement, size, memArr, bindTo, firstIndex, isArray)
+        local size, memArr, bindTo, firstIndex, array = t.size, t.memArr, t.bindTo, t.firstIndex, t.array
+        local members, mname, arrayOrigin = t.members, t.mname, t.arrayOrigin
+        callWhenGameInitialized(function()
+            -- note: "obj" argument doesn't always refer to base structure, it can refer to arrays, member structs (that contain given member) etc.
+            local handlerUpvalId, oldHandler
+            if array then
+                handlerUpvalId, oldHandler = debug.findupvalue(array, "f")
+            else
+                oldHandler = assert(members[mname])
+            end
+            local function myHandler(o, obj, name, val, ...)
+                --debug.Message(o:tohex(), obj["?ptr"]:tohex(), name, val)
+                local old = memArr[obj["?ptr"] + o]
+                local ret = oldHandler(o, obj, name, val, ...)
+                if val ~= nil then
+                    local new = memArr[obj["?ptr"] + o]
+                    if new ~= old then
+                        local index = array and (o / size) or (o - arrayOrigin) / size
+                        index = index + firstIndex
+                        bindTo[index] = bindTo[index] + (new - old)
                     end
-                    return ret
-                end
-                if array then
-                    debug.setupvalue(array, handlerUpvalId, myHandler)
-                else
-                    members[mname] = myHandler
-                end
-            end)
-        end
-
-        --[[
-            evt.StdItemsChanceSums
-  nil
-> evt.StdBonusChanceSums
-  (table: 0x042a8b38)
-> evt.StdBonusChanceSums[1]
-  115
-> Game.StdItemsTxt[5]
-  (table: 0x0449dd70)
-> Game.StdItemsTxt[5].W1
-  nil
-> Game.StdItemsTxt[5].Arm
-  5
-> Game.StdItemsTxt[5].Arm = 20
-        ]]
-
-        bindHandlerWithItemDataArray{array = structs.m.ItemsTxtItem.ChanceByLevel, size = 1, memArr = u1, bindTo = rndItemsChanceSums, firstIndex = 1}
-
-        do
-            local sums = enchantmentDataOffset + 0x18
-            local function getOffset(key)
-                local offsets = {["Standard"] = 0, ["Special"] = 6 * 4, ["SpecialPercentage"] = 6 * 4 * 2}
-                local off = sums + (offsets[key] or error(format("Invalid index %q", key), 3))
-            end
-            evt.RndItemsBonusChanceByLevel = setmetatable({}, {
-                __index = function(t, i)
-                    checkIndex(i, 1, 6, 2)
-                    local tab = setmetatable({}, {
-                        __index = function(self, key)
-                            return u4[sums + getOffset(key) + i * 4]
-                        end,
-                        __newindex = function(self, key, val)
-                            u4[sums + getOffset(key) + i * 4] = assertnum(val, 2)
-                        end
-                    })
-                    rawset(t, i, tab)
-                    return tab
-                end
-            })
-        end
-
-        do
-            local sums = makeMemoryTogglerTable{arr = u4, size = 4, buf = enchantmentDataOffset + 0x60,
-            minIndex = 1, maxIndex = 9, "Valid indexes are from %d to %d"}
-            evt.StdBonusChanceSums = sums
-            local members = structs.m.StdItemsTxtItem
-            bindHandlerWithItemDataArray{array = members.ChanceForSlot, size = 1, memArr = u1, bindTo = sums, firstIndex = 1}
-            for _, mname in ipairs{"Arm", "Shld", "Helm", "Belt", "Cape", "Gaunt", "Boot", "Ring", "Amul"} do
-                bindHandlerWithItemDataArray{members = members, mname = mname, size = 1, memArr = u1, bindTo = sums, firstIndex = 1,
-                    arrayOrigin = structs.o.StdItemsTxtItem.ChanceForSlot}
-            end
-        end
-
-        local enchOffset = 0x84
-        do
-            local accessorsCache = {}
-            evt.StdBonusStrengthRanges = setmetatable({}, {__index = function(t, i)
-                assert(i >= 1 and i <= 6, "Invalid treasure level")
-                local ret = accessorsCache[i]
-                if not ret then
-                    ret = setmetatable({}, {__index = function(_, j)
-                        checkIndex(j, 0, 1, 2)
-                        return u4[enchantmentDataOffset + enchOffset + (i - 1) * 8 + j * 4]
-                    end, __newindex = function(self, j, val)
-                        checkIndex(j, 0, 1, 2)
-                        -- commented out, because could break assigning table of values
-                        -- if index == 0 then
-                        --     assert(val <= self[1], "Invalid range (%d-%d)", val, self[1])
-                        -- elseif index == 1 then
-                        --     assert(val >= self[0], "Invalid range (%d-%d)", self[1], val)
-                        -- end
-                        u4[enchantmentDataOffset + enchOffset + (i - 1) * 8 + j * 4] = val
-                    end})
-                    accessorsCache[i] = ret
                 end
                 return ret
-            end,
-            __newindex = function(t, i, val)
-                if type(val) ~= "table" then
-                    error("Table value expected", 2)
-                elseif #val < 2 then
-                    error("Table must have at least 2 values, starting from index 1", 2)
-                end
-                t[i][0] = val[1]
-                t[i][1] = val[2]
-            end})
-        end
-
-        -- evt.StdBonusStrengthRanges allows you to change default bonuses power. Table is indexed first by treasure level (1-6) and then by either 0 or 1 (lower or upper bound). When you simply index it, you get current value. When you assign to it, that range bound is modified (note that no checks are made for invalid ranges, they might crash the game). You can also assign an array with two fields to set both range ends at once.
-        -- examples:
-        --[[
-            -- TODO: Low, End, LowEnd fields, newindex, index etc.
-        ]]
-
-        evt.SpcBonusChanceSums = makeMemoryTogglerTable{arr = u4, size = 4, buf = enchantmentDataOffset + 0xB4,
-            minIndex = 1, maxIndex = 12, errorFormat = "Valid indexes are from %d to %d"}
-
-        -- can item be generated, TODO: patch all instances
-        -- some unpatched: evt.GiveItem
-        do
-            local buf = StaticAlloc(itemCount)
-            mem.fill(buf, 400, 1) -- normal items
-            mem.fill(buf + 400, itemCount - 400, 0) -- artifacts and quest items and after
-            local can = makeMemoryTogglerTable{buf = buf, arr = u1, size = 1, minIndex = 1, maxIndex = itemCount,
-                bool = true, errorFormat = "Invalid item id (range: [%d %d])"}
-            -- if value at index idx is 0, item idx cannot be generated (artifacts and quest items by default), otherwise it can
-            evt.CanItemBeRandomlyFound = can
-            HookManager{
-                buf = buf, itemCount = itemCount, 
-            }.asmpatch(0x448A1C, [[
-                ; edi = item id
-                mov cl, [%buf% + edi - 1]
-                test cl, cl
-                jne @nextIteration
-                    ; current cannot be generated - find first which can
-                    push esi
-                    xchg esi, edi
-                    lea edi, [%buf% + esi]
-                    mov ecx, %itemCount%
-                    sub ecx, esi
-                    push eax
-                    mov al, 1
-                    repne scasb
-                    pop eax
-                    xchg esi, edi
-                    pop esi
-                    jne @exit
-                        ; correct item id
-                        neg ecx
-                        lea edi, [%itemCount% + ecx]
-                        ; ptr to correct item chance for slot
-                        lea eax, [edi + edi * 4]
-                        lea eax, [esi + eax * 8 + 0x1A + 4] ; +4 to skip items size field
-                        add eax, ebx ; treasure level - 1
-                        jmp absolute 0x4489A2
-                @nextIteration:
-                add eax, 0x28
-                jmp absolute 0x4489A2
-                @exit:
-            ]], 0xF)
-        end
-        --evt.CanItemBeRandomlyFound[591] = true; tryGetMouseItem(591, 6)
-        mem.hookfunction(0x44A6B0, 1, 0, function(d, def, itemPtr)
-            local item = structs.Item:new(itemPtr)
-            local t = {Item = item, Allow = true}
-            events.cocall("GenerateArtifact", t)
-            if t.Allow then
-                local r = def(itemPtr)
-                t.GenerationSuccessful = r ~= 0
-                events.cocall("ArtifactGenerated", t)
-                return r
             end
-            return 0 -- couldn't generate
-        end)
-
-        -- ITEM NAME HOOK --
-        -- there are two variations, one is for any item, second for only identified items. First one jumps to second if item is identified
-        -- any item variant requires asmpatch to hookfunction it, because it has short jump
-        -- since both variations are called by game code, I need two hooks here
-        -- however, I opted for using hook manager to disable second hook if first is entered and reenable after finishing, to avoid unnecessary double hook
-        -- so "identified items only" hook is called only if game calls precisely this address, and not "any item" address
-
-        addr = asmpatch(0x448660, [[
-            test byte ptr [ecx+0x14],1
-            je absolute 0x44866B
-        ]], 0x6)
-
-        local function getOwnBufferHookFunction(identified)
-            local itemNameBuf, itemNameBufLen
-            return function(d, def, itemPtr)
-                local defNamePtr = def(itemPtr)
-                -- identified name only means that function should only set full item names, if it's false, when item is not identified, for example only "Chain Mail" may be set
-                local t = {Item = structs.Item:new(d.ecx), Name = mem.string(defNamePtr), IdentifiedNameOnly = identified}
-                local prevName = t.Name
-                events.call("GetItemName", t)
-                if t.Name ~= prevName then
-                    local len = t.Name:len()
-                    if len <= 0x63 then
-                        mem.copy(0x56B708, t.Name .. string.char(0))
-                    else
-                        if not itemNameBuf or itemNameBufLen < len + 1 then
-                            if itemNameBuf then
-                                mem.free(itemNameBuf)
-                            end
-                            itemNameBufLen = len + 1
-                            itemNameBuf = mem.malloc(itemNameBufLen)
-                        end
-                        mem.copy(itemNameBuf, t.Name .. string.char(0))
-                        return itemNameBuf
-                    end
-                end
-                return defNamePtr
+            if array then
+                debug.setupvalue(array, handlerUpvalId, myHandler)
+            else
+                members[mname] = myHandler
             end
-        end
-
-        local identifiedItemNameHooks = HookManager()
-        identifiedItemNameHooks.hookfunction(0x448680, 1, 0, getOwnBufferHookFunction(false))
-
-        local secondHookFunc = getOwnBufferHookFunction(true)
-        mem.hookfunction(addr, 1, 0, function(d, def, itemPtr)
-            identifiedItemNameHooks.Switch(false)
-            local r = secondHookFunc(d, def, itemPtr)
-            identifiedItemNameHooks.Switch(true)
-            return r
         end)
     end
 
-    function setAlchemyHooks(itemCount)
-        -- potions
+    local rndItemsChanceSums = makeMemoryTogglerTable{arr = u4, size = 4, buf = enchantmentDataOffset,
+        minIndex = 1, maxIndex = 6, errorFormat = "Valid indexes are from %d to %d"}
+    evt.RndItemsChanceSums = rndItemsChanceSums
 
-        -- items that activate potion mixing code
-        local isItemMixableBuf = StaticAlloc(itemCount)
-        mem.fill(isItemMixableBuf, itemCount, 0)
-        mem.fill(isItemMixableBuf + 160 - 1, 29, 1)
+    bindHandlerWithItemDataArray{array = structs.m.ItemsTxtItem.ChanceByLevel, size = 1, memArr = u1, bindTo = rndItemsChanceSums, firstIndex = 1}
 
-        evt.IsItemMixable = makeMemoryTogglerTable{arr = u1, size = 1, buf = isItemMixableBuf, bool = true,
-            minIndex = 1, maxIndex = itemCount, errorFormat = "Invalid item id"}
-        
-        hooks.ref.isItemIdMixable = HookManager{
-            buf = isItemMixableBuf
-        }.asmproc([[
-            ; ecx - item id
-            xor eax, eax
-            test ecx, ecx ; avoid bug if there is no item (id == 0)
-            jne @F
-            inc ecx
-            @@:
-            mov al, [ecx + %buf% - 1]
-            ret
-        ]])
-
-        local isItemPotionBottleBuf = StaticAlloc(itemCount)
-        mem.fill(isItemPotionBottleBuf, itemCount, 0)
-        u1[isItemPotionBottleBuf + 162] = 1
-        mem.fill(isItemPotionBottleBuf + 188, 8, 1)
-        evt.IsItemPotionBottle = makeMemoryTogglerTable{arr = u1, size = 1, buf = isItemPotionBottleBuf, bool = true, 
-            minIndex = 1, maxIndex = itemCount, errorFormat = "Invalid item id"}
-        hooks.ref.isItemPotionBottle = HookManager{
-            buf = isItemPotionBottleBuf
-        }.asmproc([[
-            ; ecx - item id
-            xor eax, eax
-            test ecx, ecx
-            jne @F
-            inc ecx
-            @@:
-            mov al, [ecx + %buf% - 1]
-            ret
-        ]])
-
-        local isItemPotionBuf = StaticAlloc(itemCount)
-        mem.fill(isItemPotionBuf, itemCount, 0)
-        mem.fill(isItemPotionBuf + 163, 25, 1)
-        evt.IsItemPotion = makeMemoryTogglerTable{arr = u1, size = 1, buf = isItemPotionBuf, bool = true,
-            minIndex = 1, maxIndex = itemCount, errorFormat = "Invalid item id"}
-        hooks.ref.isItemPotion = HookManager{
-            buf = isItemPotionBuf
-        }.asmproc([[
-            ; ecx - item id
-            xor eax, eax
-            test ecx, ecx
-            jne @F
-            inc ecx
-            @@:
-            mov al, [ecx + %buf% - 1]
-            ret
-        ]])
-        
-        hooks.asmpatch(0x410B1C, [[
-            ; change weird empty potion bottles into common one (mouse item)
-            push eax
-            mov ecx, eax
-            call absolute %isItemPotionBottle%
-            test al, al
-            pop eax
-            je absolute 0x410B34
-        ]], 0xE)
-
-        hooks.asmpatch(0x410B4C, [[
-            ; like above, but for rightclicked item
-            push eax
-            call absolute %isItemPotionBottle%
-            test al, al
-            pop eax
-            je absolute 0x410B67
-        ]], 0x10)
-
-        hooks.ref.mouseItem = Mouse.Item["?ptr"]
-        hooks.asmpatch(0x410B67, [[
-            push eax
-            mov ecx, eax
-            call absolute %isItemPotionBottle%
-            pop ecx
-            test al, al
-            jne absolute 0x41103A
-            call absolute %isItemIdMixable%
-            test al, al
-            je absolute 0x41103A
-            mov ecx,dword ptr [edi]
-            call absolute %isItemIdMixable%
-            test al, al
-            je absolute 0x41103A
-            mov eax, [%mouseItem%]
-            mov ecx, [edi]
-        ]], 0x3B)
-
-        local potionBuf = StaticAlloc(9)
-        -- potion id might not be needed (vanilla code sets it), but let's keep it just in case
-        local customMixResult, newPotionId, newPower = potionBuf, potionBuf + 1, potionBuf + 5
-        hook(0x410BA2, function(d)
-            local clicked, mouse = structs.Item:new(d.edi), Mouse.Item
-            -- set result to false to restrict mixing, 0 lets vanilla code select new potion (will probably crash for nonstandard ones)
-            local t = {ClickedPotion = clicked, MousePotion = mouse, Player = GetPlayer(d.esi), Handled = false, Result = 0, ResultPower = 0, Explosion = false, PotionTxtResult = Game.PotionTxt[mouse.Number][clicked.Number]}
-            t.ClickedPower, t.MousePower = t.ClickedPotion.Bonus, t.MousePotion.Bonus
-            function t.CheckCombination(a, b) -- returns true if two provided ids are ids of any potion participating in mixing
-                return clicked.Number == a and mouse.Number == b or clicked.Number == b and mouse.Number == a
+    do
+        local sums = enchantmentDataOffset + 0x18
+        local function getOffset(key)
+            local offsets = {["Standard"] = 0, ["Special"] = 6 * 4, ["SpecialPercentage"] = 6 * 4 * 2}
+            local off = sums + (offsets[key] or error(format("Invalid index %q", key), 3))
+        end
+        evt.RndItemsBonusChanceByLevel = setmetatable({}, {
+            __index = function(t, i)
+                checkIndex(i, 1, 6, 2)
+                local tab = setmetatable({}, {
+                    __index = function(self, key)
+                        return u4[sums + getOffset(key) + i * 4]
+                    end,
+                    __newindex = function(self, key, val)
+                        u4[sums + getOffset(key) + i * 4] = assertnum(val, 2)
+                    end
+                })
+                rawset(t, i, tab)
+                return tab
             end
-            events.cocall("MixPotion", t)
-            u1[customMixResult] = 0
-            if t.Handled then
-                u4[d.esp] = 0x411028
-            elseif t.Explosion then
-                assert(t.Explosion >= 1 and t.Explosion <= 4, "Explosion power must be in [1, 4] range")
-                d.ebx = t.Explosion
-                u1[customMixResult] = 1
-                u4[d.esp] = 0x410BB6
-            elseif t.Result and t.Result ~= 0 then
-                u1[customMixResult] = 1
-                u4[newPotionId] = t.Result
-                d.ebx = t.Result
-                u4[newPower] = t.ResultPower or 0
-                u4[d.esp] = 0x410BB6
-            elseif not t.Result then -- cannot mix
-                d.ebx = 0
-                u4[d.esp] = 0x410BB6
+        })
+    end
+
+    do
+        local sums = makeMemoryTogglerTable{arr = u4, size = 4, buf = enchantmentDataOffset + 0x60,
+        minIndex = 1, maxIndex = 9, "Valid indexes are from %d to %d"}
+        evt.StdBonusChanceSums = sums
+        local members = structs.m.StdItemsTxtItem
+        bindHandlerWithItemDataArray{array = members.ChanceForSlot, size = 1, memArr = u1, bindTo = sums, firstIndex = 1}
+        for _, mname in ipairs{"Arm", "Shld", "Helm", "Belt", "Cape", "Gaunt", "Boot", "Ring", "Amul"} do
+            bindHandlerWithItemDataArray{members = members, mname = mname, size = 1, memArr = u1, bindTo = sums, firstIndex = 1,
+                arrayOrigin = structs.o.StdItemsTxtItem.ChanceForSlot}
+        end
+    end
+
+    local enchOffset = 0x84
+    do
+        local accessorsCache = {}
+        evt.StdBonusStrengthRanges = setmetatable({}, {__index = function(t, i)
+            assert(i >= 1 and i <= 6, "Invalid treasure level")
+            local ret = accessorsCache[i]
+            if not ret then
+                ret = setmetatable({}, {__index = function(_, j)
+                    checkIndex(j, 0, 1, 2)
+                    return u4[enchantmentDataOffset + enchOffset + (i - 1) * 8 + j * 4]
+                end, __newindex = function(self, j, val)
+                    checkIndex(j, 0, 1, 2)
+                    -- commented out, because could break assigning table of values
+                    -- if index == 0 then
+                    --     assert(val <= self[1], "Invalid range (%d-%d)", val, self[1])
+                    -- elseif index == 1 then
+                    --     assert(val >= self[0], "Invalid range (%d-%d)", self[1], val)
+                    -- end
+                    u4[enchantmentDataOffset + enchOffset + (i - 1) * 8 + j * 4] = val
+                end})
+                accessorsCache[i] = ret
             end
-        end)
+            return ret
+        end,
+        __newindex = function(t, i, val)
+            if type(val) ~= "table" then
+                error("Table value expected", 2)
+            elseif #val < 2 then
+                error("Table must have at least 2 values, starting from index 1", 2)
+            end
+            t[i][0] = val[1]
+            t[i][1] = val[2]
+        end})
+    end
 
-        table.copy({customMixResult = customMixResult, newPotionId = newPotionId, newPower = newPower}, hooks.ref, true)
+    -- evt.StdBonusStrengthRanges allows you to change default bonuses power. Table is indexed first by treasure level (1-6) and then by either 0 or 1 (lower or upper bound). When you simply index it, you get current value. When you assign to it, that range bound is modified (note that no checks are made for invalid ranges, they might crash the game). You can also assign an array with two fields to set both range ends at once.
+    -- examples:
+    --[[
+        -- TODO: Low, End, LowEnd fields, newindex, index etc.
+    ]]
+    do
+        local sums = makeMemoryTogglerTable{arr = u4, size = 4, buf = enchantmentDataOffset + 0xB4,
+        minIndex = 1, maxIndex = 12, errorFormat = "Valid indexes are from %d to %d"}
+        evt.SpcBonusChanceSums = sums
+        local members = structs.m.SpcItemsTxtItem
+        bindHandlerWithItemDataArray{array = members.ChanceForSlot, size = 1, memArr = u1, bindTo = sums, firstIndex = 1}
+        for _, mname in ipairs{"W1", "W2", "Miss", "Arm", "Shld", "Helm", "Belt", "Cape", "Gaunt", "Boot", "Ring", "Amul"} do
+            bindHandlerWithItemDataArray{members = members, mname = mname, size = 1, memArr = u1, bindTo = sums, firstIndex = 1,
+                arrayOrigin = structs.o.SpcItemsTxtItem.ChanceForSlot}
+        end
+    end
 
-        -- apply data from above event to potion
-        hooks.asmhook2(0x410FD3, [[
-            mov al, [%customMixResult%]
-            and byte [%customMixResult%], 0
-            test al, al
-            je @exit
-            mov eax, [%newPotionId%]
-            mov [edi], eax
-            mov eax, [%newPower%]
-            mov [edi + 4], eax
+    -- can item be generated, TODO: patch all instances
+    -- some unpatched: evt.GiveItem
+    do
+        local buf = StaticAlloc(itemCount)
+        mem.fill(buf, 400, 1) -- normal items
+        mem.fill(buf + 400, itemCount - 400, 0) -- artifacts and quest items and after
+        local canBeFound = makeMemoryTogglerTable{buf = buf, arr = u1, size = 1, minIndex = 1, maxIndex = itemCount,
+            bool = true, errorFormat = "Invalid item id (range: [%d %d])"}
+        -- if value at index idx is 0, item idx cannot be generated (artifacts and quest items by default), otherwise it can
+        evt.CanItemBeRandomlyFound = canBeFound
+        HookManager{
+            buf = buf, itemCount = itemCount, 
+        }.asmpatch(0x448A1C, [[
+            ; edi = item id
+            mov cl, [%buf% + edi - 1]
+            test cl, cl
+            jne @nextIteration
+                ; current cannot be generated - find first which can
+                push esi
+                xchg esi, edi
+                lea edi, [%buf% + esi]
+                mov ecx, %itemCount%
+                sub ecx, esi
+                push eax
+                mov al, 1
+                repne scasb
+                pop eax
+                xchg esi, edi
+                pop esi
+                jne @exit
+                    ; correct item id
+                    neg ecx
+                    lea edi, [%itemCount% + ecx]
+                    ; ptr to correct item chance for slot
+                    lea eax, [edi + edi * 4]
+                    lea eax, [esi + eax * 8 + 0x1A + 4] ; +4 to skip items size field
+                    add eax, ebx ; treasure level - 1
+                    jmp absolute 0x4489A2
+            @nextIteration:
+            add eax, 0x28
+            jmp absolute 0x4489A2
             @exit:
-        ]], 0xA)
-
-        -- TODO: autonotes 0x410FDD
-
-        -- tests
-        do
-            local superResistance, magicPotion, divinePower, protection, curePoison, resistance = 173, 165, 178, 167, 169, 168
-            --[[
-                local pots = {173, 165, 178, 167, 169, 168}
-                for i, pot in ipairs(pots) do
-                    for j = 1, 5 do
-                        evt.GiveItem{Id = pot}
+        ]], 0xF)
+        
+        -- autofill findable items if they have nonzero chance in rnditems.txt
+        callWhenGameInitialized(function()
+            for i, entry in Game.ItemsTxt do
+                local can
+                for j, val in entry.ChanceByLevel do
+                    if val ~= 0 then
+                        can = true
+                        break
                     end
                 end
-            ]]
-            function events.MixPotion(t)
-                local idMouse, idClicked = t.MousePotion.Number, t.ClickedPotion.Number
-                if idMouse == superResistance then
-                    t.Result = magicPotion
-                    t.ResultPower = random(5, 24)
-                elseif idMouse == magicPotion and idClicked == magicPotion then
-                    t.Result = divinePower
-                    t.ResultPower = random(100, 200)
-                elseif t.CheckCombination(protection, curePoison) then
-                    t.Result = math.random(2) == 1 and divinePower or resistance
-                    t.ResultPower = 0
-                elseif t.CheckCombination(magicPotion, protection) then
-                    t.Explosion = 4
-                elseif t.CheckCombination(curePoison, magicPotion) then
-                    t.Result = false -- cannot mix
-                elseif t.CheckCombination(curePoison, curePoison) then
-                    t.Handled = true -- do nothing at all
+
+                if can then
+                    canBeFound[i] = true
                 end
-            end
-        end
-
-        table.copy({sprintf = 0x4AE273, formatText = mem.topointer("Power: %lu"), screenAddText = 0x442E90}, hooks.ref, true)
-
-        -- show power in tooltip
-        hooks.asmhook(0x41CB20, [[
-            ; sprintf to get text
-            ; put it where bonus text is put on stack (if first byte is not 0, it will be printed automatically)
-            ; [esp + 0x10] = items txt entry ptr, ebx = item ptr
-            mov ecx, [esp + 0x10]
-            cmp byte [ecx + 0x14], 0xE ; potion bottle
-            jne @std
-            mov eax, [ebx + 4] ; bonus (power)
-            test eax, eax
-            je @std
-            lea ecx, [esp+0x114]
-            push eax
-            push %formatText%
-            push ecx
-            call absolute %sprintf%
-            add esp, 0xC
-            jmp absolute 0x41CB54
-            @std:
-        ]])
-
-        -- don't show bonus name in item name for potions (I use this field for power)
-        -- DONE WITH ASMHOOK BELOW
-        -- function events.GetItemName(t)
-        --     if t.Item:T().EquipStat == const.ItemType.Potion - 1 then
-        --         t.Name = t.Item:T().Name
-        --     end
-        -- end
-
-        -- don't crash in item name function for potions ("bonus" index out of range)
-        hooks.asmhook(0x4486CE, [[
-            ; ebx - item pointer
-            mov ecx, [ebx]
-            call absolute %isItemPotion%
-            mov dl, al
-            mov ecx, [ebx]
-            call absolute %isItemPotionBottle%
-            or dl, al
-            je @std
-                add esp, 0xC
-                jmp absolute 0x448714
-            @std:
-        ]], 0x8)
-
-        -- DRINK POTION
-        autohook(0x459103, function(d) -- overwrite mm6patch hook if custom effect is added
-            local t = {Player = GetPlayer(d.esi), Potion = Mouse.Item, Handled = false, CannotDrink = false}
-            function t.MakeFaceAnimation()
-                t.Player:ShowFaceAnimation(const.FaceAnimation.DinkPotion)
-            end
-            events.cocall("DrinkPotion", t)
-            -- either: run vanilla code, run custom code or prohibit drinking
-            -- CannotDrink == true: message "item cannot be used that way"
-            -- Handled == true: don't run vanilla potion logic, but make drink sound, add recovery and remove mouse item
-            -- Handled == false: full vanilla code runs
-            if t.CannotDrink then
-                d:push(0x459EB8)
-                return true
-            elseif t.Handled then
-                d:push(0x459977)
-                return true
             end
         end)
     end
+    --evt.CanItemBeRandomlyFound[591] = true; tryGetMouseItem(591, 6)
+    mem.hookfunction(0x44A6B0, 1, 0, function(d, def, itemPtr)
+        local item = structs.Item:new(itemPtr)
+        local t = {Item = item, Allow = true}
+        events.cocall("GenerateArtifact", t)
+        if t.Allow then
+            local r = def(itemPtr)
+            t.GenerationSuccessful = r ~= 0
+            events.cocall("ArtifactGenerated", t)
+            return r
+        end
+        return 0 -- couldn't generate
+    end)
+
+    -- ITEM NAME HOOK --
+    -- there are two variations, one is for any item, second for only identified items. First one jumps to second if item is identified
+    -- any item variant requires asmpatch to hookfunction it, because it has short jump
+    -- since both variations are called by game code, I need two hooks here
+    -- however, I opted for using hook manager to disable second hook if first is entered and reenable after finishing, to avoid unnecessary double hook
+    -- so "identified items only" hook is called only if game calls precisely this address, and not "any item" address
+
+    addr = asmpatch(0x448660, [[
+        test byte ptr [ecx+0x14],1
+        je absolute 0x44866B
+    ]], 0x6)
+
+    local function getOwnBufferHookFunction(identified)
+        local itemNameBuf, itemNameBufLen
+        return function(d, def, itemPtr)
+            local defNamePtr = def(itemPtr)
+            -- identified name only means that function should only set full item names, if it's false, when item is not identified, for example only "Chain Mail" may be set
+            local t = {Item = structs.Item:new(d.ecx), Name = mem.string(defNamePtr), IdentifiedNameOnly = identified}
+            local prevName = t.Name
+            events.call("GetItemName", t)
+            if t.Name ~= prevName then
+                local len = t.Name:len()
+                if len <= 0x63 then
+                    mem.copy(0x56B708, t.Name .. string.char(0))
+                else
+                    if not itemNameBuf or itemNameBufLen < len + 1 then
+                        if itemNameBuf then
+                            mem.free(itemNameBuf)
+                        end
+                        itemNameBufLen = len + 1
+                        itemNameBuf = mem.malloc(itemNameBufLen)
+                    end
+                    mem.copy(itemNameBuf, t.Name .. string.char(0))
+                    return itemNameBuf
+                end
+            end
+            return defNamePtr
+        end
+    end
+
+    local identifiedItemNameHooks = HookManager()
+    identifiedItemNameHooks.hookfunction(0x448680, 1, 0, getOwnBufferHookFunction(false))
+
+    local secondHookFunc = getOwnBufferHookFunction(true)
+    mem.hookfunction(addr, 1, 0, function(d, def, itemPtr)
+        identifiedItemNameHooks.Switch(false)
+        local r = secondHookFunc(d, def, itemPtr)
+        identifiedItemNameHooks.Switch(true)
+        return r
+    end)
+end
+
+function setAlchemyHooks(itemCount)
+    -- potions
+
+    -- items that activate potion mixing code
+    local isItemMixableBuf = StaticAlloc(itemCount)
+    mem.fill(isItemMixableBuf, itemCount, 0)
+    mem.fill(isItemMixableBuf + 160 - 1, 29, 1)
+
+    evt.IsItemMixable = makeMemoryTogglerTable{arr = u1, size = 1, buf = isItemMixableBuf, bool = true,
+        minIndex = 1, maxIndex = itemCount, errorFormat = "Invalid item id"}
+    
+    local hooks = HookManager()
+    hooks.ref.isItemIdMixable = HookManager{
+        buf = isItemMixableBuf
+    }.asmproc([[
+        ; ecx - item id
+        xor eax, eax
+        test ecx, ecx ; avoid bug if there is no item (id == 0)
+        jne @F
+        inc ecx
+        @@:
+        mov al, [ecx + %buf% - 1]
+        ret
+    ]])
+
+    local isItemPotionBottleBuf = StaticAlloc(itemCount)
+    mem.fill(isItemPotionBottleBuf, itemCount, 0)
+    u1[isItemPotionBottleBuf + 162] = 1
+    mem.fill(isItemPotionBottleBuf + 188, 8, 1)
+    evt.IsItemPotionBottle = makeMemoryTogglerTable{arr = u1, size = 1, buf = isItemPotionBottleBuf, bool = true, 
+        minIndex = 1, maxIndex = itemCount, errorFormat = "Invalid item id"}
+    hooks.ref.isItemPotionBottle = HookManager{
+        buf = isItemPotionBottleBuf
+    }.asmproc([[
+        ; ecx - item id
+        xor eax, eax
+        test ecx, ecx
+        jne @F
+        inc ecx
+        @@:
+        mov al, [ecx + %buf% - 1]
+        ret
+    ]])
+
+    local isItemPotionBuf = StaticAlloc(itemCount)
+    mem.fill(isItemPotionBuf, itemCount, 0)
+    mem.fill(isItemPotionBuf + 163, 25, 1)
+    evt.IsItemPotion = makeMemoryTogglerTable{arr = u1, size = 1, buf = isItemPotionBuf, bool = true,
+        minIndex = 1, maxIndex = itemCount, errorFormat = "Invalid item id"}
+    hooks.ref.isItemPotion = HookManager{
+        buf = isItemPotionBuf
+    }.asmproc([[
+        ; ecx - item id
+        xor eax, eax
+        test ecx, ecx
+        jne @F
+        inc ecx
+        @@:
+        mov al, [ecx + %buf% - 1]
+        ret
+    ]])
+    
+    hooks.asmpatch(0x410B1C, [[
+        ; change weird empty potion bottles into common one (mouse item)
+        push eax
+        mov ecx, eax
+        call absolute %isItemPotionBottle%
+        test al, al
+        pop eax
+        je absolute 0x410B34
+    ]], 0xE)
+
+    hooks.asmpatch(0x410B4C, [[
+        ; like above, but for rightclicked item
+        push eax
+        call absolute %isItemPotionBottle%
+        test al, al
+        pop eax
+        je absolute 0x410B67
+    ]], 0x10)
+
+    hooks.ref.mouseItem = Mouse.Item["?ptr"]
+    hooks.asmpatch(0x410B67, [[
+        push eax
+        mov ecx, eax
+        call absolute %isItemPotionBottle%
+        pop ecx
+        test al, al
+        jne absolute 0x41103A
+        call absolute %isItemIdMixable%
+        test al, al
+        je absolute 0x41103A
+        mov ecx,dword ptr [edi]
+        call absolute %isItemIdMixable%
+        test al, al
+        je absolute 0x41103A
+        mov eax, [%mouseItem%]
+        mov ecx, [edi]
+    ]], 0x3B)
+
+    local potionBuf = StaticAlloc(9)
+    -- potion id might not be needed (vanilla code sets it), but let's keep it just in case
+    local customMixResult, newPotionId, newPower = potionBuf, potionBuf + 1, potionBuf + 5
+    hook(0x410BA2, function(d)
+        local clicked, mouse = structs.Item:new(d.edi), Mouse.Item
+        -- set result to false to restrict mixing, 0 lets vanilla code select new potion (will probably crash for nonstandard ones)
+        local t = {ClickedPotion = clicked, MousePotion = mouse, Player = GetPlayer(d.esi), Handled = false, Result = 0, ResultPower = 0, Explosion = false, PotionTxtResult = Game.PotionTxt[mouse.Number][clicked.Number]}
+        t.ClickedPower, t.MousePower = t.ClickedPotion.Bonus, t.MousePotion.Bonus
+        function t.CheckCombination(a, b) -- returns true if two provided ids are ids of any potion participating in mixing
+            return clicked.Number == a and mouse.Number == b or clicked.Number == b and mouse.Number == a
+        end
+        events.cocall("MixPotion", t)
+        u1[customMixResult] = 0
+        if t.Handled then
+            u4[d.esp] = 0x411028
+        elseif t.Explosion then
+            assert(t.Explosion >= 1 and t.Explosion <= 4, "Explosion power must be in [1, 4] range")
+            d.ebx = t.Explosion
+            u1[customMixResult] = 1
+            u4[d.esp] = 0x410BB6
+        elseif t.Result and t.Result ~= 0 then
+            u1[customMixResult] = 1
+            u4[newPotionId] = t.Result
+            d.ebx = t.Result
+            u4[newPower] = t.ResultPower or 0
+            u4[d.esp] = 0x410BB6
+        elseif not t.Result then -- cannot mix
+            d.ebx = 0
+            u4[d.esp] = 0x410BB6
+        end
+    end)
+
+    table.copy({customMixResult = customMixResult, newPotionId = newPotionId, newPower = newPower}, hooks.ref, true)
+
+    -- apply data from above event to potion
+    hooks.asmhook2(0x410FD3, [[
+        mov al, [%customMixResult%]
+        and byte [%customMixResult%], 0
+        test al, al
+        je @exit
+        mov eax, [%newPotionId%]
+        mov [edi], eax
+        mov eax, [%newPower%]
+        mov [edi + 4], eax
+        @exit:
+    ]], 0xA)
+
+    -- TODO: autonotes 0x410FDD
+
+    -- tests
+    do
+        local superResistance, magicPotion, divinePower, protection, curePoison, resistance = 173, 165, 178, 167, 169, 168
+        --[[
+            local pots = {173, 165, 178, 167, 169, 168}
+            for i, pot in ipairs(pots) do
+                for j = 1, 5 do
+                    evt.GiveItem{Id = pot}
+                end
+            end
+        ]]
+        function events.MixPotion(t)
+            local idMouse, idClicked = t.MousePotion.Number, t.ClickedPotion.Number
+            if idMouse == superResistance then
+                t.Result = magicPotion
+                t.ResultPower = random(5, 24)
+            elseif idMouse == magicPotion and idClicked == magicPotion then
+                t.Result = divinePower
+                t.ResultPower = random(100, 200)
+            elseif t.CheckCombination(protection, curePoison) then
+                t.Result = math.random(2) == 1 and divinePower or resistance
+                t.ResultPower = 0
+            elseif t.CheckCombination(magicPotion, protection) then
+                t.Explosion = 4
+            elseif t.CheckCombination(curePoison, magicPotion) then
+                t.Result = false -- cannot mix
+            elseif t.CheckCombination(curePoison, curePoison) then
+                t.Handled = true -- do nothing at all
+            end
+        end
+    end
+
+    table.copy({sprintf = 0x4AE273, formatText = mem.topointer("Power: %lu"), screenAddText = 0x442E90}, hooks.ref, true)
+
+    -- show power in tooltip
+    hooks.asmhook(0x41CB20, [[
+        ; sprintf to get text
+        ; put it where bonus text is put on stack (if first byte is not 0, it will be printed automatically)
+        ; [esp + 0x10] = items txt entry ptr, ebx = item ptr
+        mov ecx, [esp + 0x10]
+        cmp byte [ecx + 0x14], 0xE ; potion bottle
+        jne @std
+        mov eax, [ebx + 4] ; bonus (power)
+        test eax, eax
+        je @std
+        lea ecx, [esp+0x114]
+        push eax
+        push %formatText%
+        push ecx
+        call absolute %sprintf%
+        add esp, 0xC
+        jmp absolute 0x41CB54
+        @std:
+    ]])
+
+    -- don't show bonus name in item name for potions (I use this field for power)
+    -- DONE WITH ASMHOOK BELOW
+    -- function events.GetItemName(t)
+    --     if t.Item:T().EquipStat == const.ItemType.Potion - 1 then
+    --         t.Name = t.Item:T().Name
+    --     end
+    -- end
+
+    -- don't crash in item name function for potions ("bonus" index out of range)
+    hooks.asmhook(0x4486CE, [[
+        ; ebx - item pointer
+        mov ecx, [ebx]
+        call absolute %isItemPotion%
+        mov dl, al
+        mov ecx, [ebx]
+        call absolute %isItemPotionBottle%
+        or dl, al
+        je @std
+            add esp, 0xC
+            jmp absolute 0x448714
+        @std:
+    ]], 0x8)
+
+    -- DRINK POTION
+    autohook(0x459103, function(d) -- overwrite mm6patch hook if custom effect is added
+        local t = {Player = GetPlayer(d.esi), Potion = Mouse.Item, Handled = false, CannotDrink = false}
+        function t.MakeFaceAnimation()
+            t.Player:ShowFaceAnimation(const.FaceAnimation.DinkPotion)
+        end
+        events.cocall("DrinkPotion", t)
+        -- either: run vanilla code, run custom code or prohibit drinking
+        -- CannotDrink == true: message "item cannot be used that way"
+        -- Handled == true: don't run vanilla potion logic, but make drink sound, add recovery and remove mouse item
+        -- Handled == false: full vanilla code runs
+        if t.CannotDrink then
+            d:push(0x459EB8)
+            return true
+        elseif t.Handled then
+            d:push(0x459977)
+            return true
+        end
+    end)
 end
 
 function events.CanItemBeAffectedBySpell(t)
