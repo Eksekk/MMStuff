@@ -1391,6 +1391,22 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
 
     -- tests
     local slotNames = table.invert(spcBonusSlotNames)
+    function showbonus(std, i, slot, useName)
+        local arr, myarr = std and Game.StdItemsTxt or Game.SpcItemsTxt, std and evt.StdBonusChanceSums or evt.SpcBonusChanceSums
+        if useName then
+            local name = slotNames[slot + (std and 3 or 0)]
+            return arr[i][name], myarr[name]
+        else
+            return arr[i].ChanceForSlot[slot], myarr[slot]
+        end
+    end
+    function _G.stdb(i, slot, useName)
+        return showbonus(true, i, slot, useName)
+    end
+    function _G.spcb(i, slot, useName)
+        return showbonus(false, i, slot, useName)
+    end
+
     callWhenGameInitialized(function()
         for _, itemIndex in ipairs{3, 24, 53, 71, 80, 200, 222, 223, 321, 360, 450} do
 
@@ -1398,19 +1414,19 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
 
         local std, spc = Game.StdItemsTxt, Game.SpcItemsTxt
         -- 1. test std/spc arrays
-        -- FIXME: doesn't test "Arm" etc., only arrays
-        for _, arr in ipairs{std, spc} do
-            local isStd = arr == std
+        for _, gameArr in ipairs{std, spc} do
+            local isStd = gameArr == std
             local count = isStd and 9 or 12
             for _, slot in ipairs{0, 2, 3, 5, 6, count - 1} do
-                local maxEnch = arr.High
-                local slotName = slotNames[slot + (std and 3 or 0)] -- std items doesn't use lower 3 slots (weapons and bow)
+                local maxEnch = gameArr.High
+                local slotName = slotNames[slot + (isStd and 3 or 0)] -- std items doesn't use lower 3 slots (weapons and bow)
                 for _, enchId in ipairs{1, 3, 6, 7, 11, 13, maxEnch - 1, maxEnch} do
-                    local entry = arr[enchId]
+                    local entry = gameArr[enchId]
                     local myArr = isStd and evt.StdBonusChanceSums or evt.SpcBonusChanceSums
                     for _, add in ipairs{5, 12, 33, -20, -4, 11, 23, 45, -32, 0, 3, -1, 1} do
                         local myVal = myArr[slot]
                         local oldChance = entry.ChanceForSlot[slot]
+                        local initialVal, initialChance = myVal, oldChance
                         entry.ChanceForSlot[slot] = oldChance + add
                         assert(myVal + add == myArr[slot],
                             format("[%s, %s] Slot (%d), enchId (%d): old value %d after adding %d doesn't match expected (%d)",
@@ -1427,8 +1443,10 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
                         entry.ChanceForSlot[slot] = oldChance
 
                         -- now do it again, but use slot names
-                        myVal = myArr[slotName]
-                        oldChance = entry[slotName]
+                        assert(myVal == myArr[slotName], format("%d %d", myVal, myArr[slotName]))
+                        --myVal = myArr[slotName]
+                        assert(oldChance == entry[slotName], format("%d %d", oldChance, entry[slotName]))
+                        --oldChance = entry[slotName]
                         entry[slotName] = oldChance + add
                         assert(myVal + add == myArr[slotName],
                             format("[%s, %s] Slot name %q, enchId (%d): old value %d after adding %d doesn't match expected (%d)",
@@ -1440,6 +1458,9 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
                                 isStd and "StdItemsTxt" or "SpcItemsTxt", "MMExt array", slotName, enchId, myVal, add, myVal + add
                             )
                         )
+                        -- entry[slotName] = oldChance
+                        -- local value, chance = myArr[slotName], entry[slotName] -- to show current values as locals
+                        -- assert(value == initialVal and chance == initialChance, "Couldn't fully restore previous values")
                     end
                 end
             end
