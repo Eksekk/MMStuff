@@ -145,7 +145,7 @@ Items = Items or {} -- global containing item tools
 
 -- Items.PaperdollArmorCoords - this table allows you setting custom armor coordinates. It has three "layers": 
 --     1. First layer is indexed by item id. You get back a table...
---     2. Which can be indexed with either "Body" or 1, "LeftArm" or 2, and "RightArm" or 3 to get setter/getter table for coords of specific armor body part. The new table...
+--     2. Which can be indexed with either "Body" or 1, "ArmOneHanded" or 2, and "ArmTwoHanded" or 3 to get setter/getter table for coords of specific armor body part. The new table...
 --     3. Can be indexed with X or 1, Y or 2, and XY or 3. If you simply index, you get current value (as number in first two cases, as table in third). When you assign to it, expected input is the same. New items using existing pictures (armors/belt/helms from original game) will have coords filled in automatically, custom ones must be supplied manually.
 
 -- when you want to assign coords, you can assign a two-layered table to specific item id and it'll work just fine. See below for example. If you do it, parts having already good coords can be skipped.
@@ -163,13 +163,13 @@ Items = Items or {} -- global containing item tools
     ---- local y = plate.Body.Y
     coords[goldenPlateId] = { -- this WOULDN'T work: "plate = {...}", you need to assign key to table directly
         Body = {X = 50, Y = 30},
-        LeftArm = {x, Y = 30}
-        RightArm = {20, 20}
+        ArmOneHanded = {x, Y = 30}
+        ArmTwoHanded = {20, 20}
     }
     local coords2 = coords[72]
     coords2.Body.XY = coords2.Body.X + 20, coords2.Body.Y + 50
-    coords2.RightArm[1] = 88 -- same as X
-    coords2.LeftArm[2] = plate.Body.Y -- same as Y
+    coords2.ArmTwoHanded[1] = 88 -- same as X
+    coords2.ArmOneHanded[2] = plate.Body.Y -- same as Y
 ]]
 
 -- HELP END --
@@ -1092,15 +1092,15 @@ function setItemDrawingHooks()
             __index = function(self, itemId)
                 local ret = accessorsCache[itemId]
                 if not ret then
-                    ret = {Body = makeCoordsAccessor(itemId, 0), LeftArm = makeCoordsAccessor(itemId, 4), RightArm = makeCoordsAccessor(itemId, 8)}
-                    ret[1], ret[2], ret[3] = ret.Body, ret.LeftArm, ret.RightArm
+                    ret = {Body = makeCoordsAccessor(itemId, 0), ArmOneHanded = makeCoordsAccessor(itemId, 4), ArmTwoHanded = makeCoordsAccessor(itemId, 8)}
+                    ret[1], ret[2], ret[3] = ret.Body, ret.ArmOneHanded, ret.ArmTwoHanded
                     accessorsCache[itemId] = ret
                 end
                 -- rawset(self, itemId, ret) -- no rawset to make newindex work, use caching instead
                 return ret
             end,
             __newindex = function(self, itemId, val)
-                for i, arrName in ipairs{"Body", "LeftArm", "RightArm"} do
+                for i, arrName in ipairs{"Body", "ArmOneHanded", "ArmTwoHanded"} do
                     local a = self[itemId][arrName]
                     local innerVal = val[arrName] or val[i]
                     for k, v in pairs(innerVal) do
@@ -1127,8 +1127,8 @@ function setItemDrawingHooks()
 
                 paperdollArmorCoords[i] = {
                     Body = {i2[0x4BCDF8 + off], i2[0x4BCE14 + off]},
-                    LeftArm = {i2[0x4BCE30 + off], i2[0x4BCE4C + off]},
-                    RightArm = {i2[0x4BCE68 + off], i2[0x4BCE84 + off]}
+                    ArmOneHanded = {i2[0x4BCE30 + off], i2[0x4BCE4C + off]},
+                    ArmTwoHanded = {i2[0x4BCE68 + off], i2[0x4BCE84 + off]}
                 }
 
                 -- fill in default coords from memory for easy modification, but don't use them by default
@@ -1143,7 +1143,8 @@ function setItemDrawingHooks()
     hooks.ref.armorXYwasSet = armorXYwasSet
 
     -- armors
-
+    Items.PaperdollArmorCoords[609] = {Body = {505, 95}, ArmOneHanded = {566, 95}, ArmTwoHanded = {569, 95}}
+    Items.PaperdollArmorCoords[610] = {Body = {510, 95}, ArmOneHanded = {566, 95}, ArmTwoHanded = {569, 95}}
     -- correct bitmap id
     hooks.asmpatch(0x4125C8, [[
         push ecx
@@ -1206,7 +1207,7 @@ function setItemDrawingHooks()
         pop edx
     ]]
 
-    -- left arm
+    -- offhand equipped arm
 
     -- always draw
     asmpatch(0x412AE1, "test dword [ebp+0x1434], 0xFFFFFFFF", 0x11)
@@ -1221,7 +1222,7 @@ function setItemDrawingHooks()
     }, hooks.ref, true)
     hooks.asmpatch(0x412B39, patch, 0x17)
 
-    -- right arm
+    -- no offhand equipped arm
 
     table.copy({
         defaultXoff = 0x4BCE68,
