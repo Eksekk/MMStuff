@@ -17,6 +17,10 @@ Items = Items or {} -- global containing item tools
 
 -- HELP --
 
+---------------------
+------ GENERAL ------
+---------------------
+
 -- Items.CanItemBeRandomlyFound decides, well, whether the item can be found :) It's indexed by item id. When you set false, item can't be generated randomly no matter what. Custom items are set to true by default (if they have nonzero rnditems.txt chances).
 
 -- rnditems.txt file is slightly changed. You can add rows corresponding to any item defined in items.txt (but you don't need to fill in all rows, unfilled ones will simply be zeroed). You don't need to update total chance sums when changing specific items, they are only informational (it was like that in vanilla).
@@ -60,13 +64,25 @@ Items = Items or {} -- global containing item tools
     end
 ]]
 
--- ALCHEMY
+-- new event: GenerateArtifact(t)
+-- parameters:
+--     Item -> item being generated (in this event it's really just space assigned for item, will be overwritten)
+--     Allow -> if you set this to false, item won't be generated
+-- new event: ArtifactGenerated(t) [called only if previous event sets (or leaves) "Allow = true"]
+-- parameters:
+--      Item -> carried over from previous event, contains generated item data
+--      Allow -> carried over
+--      GenerationSuccessful -> is true if vanilla code managed to generate an artifact
+
+---------------------
+------ ALCHEMY ------
+---------------------
 
 -- Items.IsItemMixable is an array of booleans indexed by item id. Value indicates whether item with given id is mixable (activates potion mixing code).
 -- Items.IsItemPotionBottle (format same as above) determines if item is a potion bottle. Items which are true there will be changed into basic empty bottle (item id 163) on any potion mix attempt. No, I don't know why there are multiple potion bottles.
 -- Items.IsItemPotion determines whether item is a potion. Atm it's not used, intended to distinguish reagents from actual potions.
 
--- new event: MixPotion
+-- new event: MixPotion(t)
 -- parameters:
 --     Result -> item id of result potion. If 0, vanilla code runs and selects new item id. If false, mix cannot be performed (item tooltip is shown)
 --     ClickedPower -> power ("Bonus" field) of clicked potion
@@ -109,7 +125,7 @@ Items = Items or {} -- global containing item tools
     end
 ]=]
 
--- new event: DrinkPotion
+-- new event: DrinkPotion(t)
 -- parameters:
 --     CannotDrink -> If this is true: message "item cannot be used that way" is displayed and item is not consumed. TODO: allow changing message
 --     Handled -> If this is true: don't run vanilla potion logic, but make drink sound, add recovery and remove mouse item. Otherwise, if it's false, full vanilla code runs (in addition to your handler)
@@ -134,7 +150,7 @@ Items = Items or {} -- global containing item tools
 
 -- when you want to assign coords, you can assign a two-layered table to specific item id and it'll work just fine. See below for example. If you do it, parts having already good coords can be skipped.
 
--- once you assign any coords to an item, it will use those coords. To restore vanilla coords (only for vanilla items, others will crash!), execute function PaperdollArmorCoords.ClearCustomCoords(itemId)
+-- once you assign any coords to an item, it will use those coords. To restore vanilla coords (only for vanilla items, others will crash!), execute function Items.PaperdollArmorCoords.ClearCustomCoords(itemId)
 
 --[[
     example usage:
@@ -196,7 +212,7 @@ local function makeMemoryTogglerTable(t)
         checkIndex(i, minIndex, maxIndex, 2, errorFormat)
         local off = buf + (i - minIndex) * size
         if bool then
-            arr[off] = val and 1 or 0
+            arr[off] = val and val ~= 0 and 1 or 0
         else
             local smaller, greater = val < (minValue or val), val > (maxValue or val)
             if smaller or greater then
@@ -882,7 +898,7 @@ do
                 jmp absolute 0x4496F7
         ]], 0xC)
 
-        -- generate item function stuff
+        -- generate item function stuff (use bigger "item ids suitable for generation" buffer)
         do
             local itemBuf = StaticAlloc(itemCount * 4)
             local hooks = HookManager{itemBuf = itemBuf}
@@ -1664,7 +1680,7 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
             end
         end
     end
-    callWhenGameInitialized(runTests)
+    --callWhenGameInitialized(runTests)
 end
 
 function setAlchemyHooks(itemCount)
