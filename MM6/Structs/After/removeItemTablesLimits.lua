@@ -119,10 +119,18 @@ Items = Items or {} -- global containing item tools
 
 -- NEW ITEM BITMAPS --
 
+-- new bitmaps for belts/helmets/armors (other items need only those used in inventory) are loaded automatically, but they need to have fixed naming scheme:
+--     for armors: let base name be "MyPlate". Then file name of inventory bitmaps and items.txt picture should be "MyPlateicon", main worn armor part should be "MyPlatebod", 1st arm "MyPlatearm1", 2nd arm "MyPlatearm2".
+--     for belts: if base name is "MyBelt1" (it needs to end with a number), inventory icon should be "MyBelt1a", and belt on paperdoll should have file name "MyBelt1b"
+--     for helmets:
+--         actual helmets: if base name is "helm1", then inventory sprite must be named "hlm1" (without the "e"), and paperdoll sprite "helm1" (with the "e")
+--         hats: if base name is "hat1", then inventory sprite must be named like that, and character sprite "hat1b"
+--         crowns: if base name is "crown1", then inventory sprite must be named like that, and character sprite "crown1b" (same as hats except for prefix)
+
 -- Items.PaperdollArmorCoords - this table allows you setting custom armor coordinates. It has three "layers": 
 --     1. First layer is indexed by item id. You get back a table...
 --     2. Which can be indexed with either "Body" or 1, "LeftArm" or 2, and "RightArm" or 3 to get setter/getter table for coords of specific armor body part. The new table...
---     3. Can be indexed with X or 1, Y or 2, and XY or 3. If you simply index, you get current value (as number in first two cases, as table in third). When you assign to it, expected input is the same. New items using existing pictures will have coords filled in automatically, custom ones must be supplied manually.
+--     3. Can be indexed with X or 1, Y or 2, and XY or 3. If you simply index, you get current value (as number in first two cases, as table in third). When you assign to it, expected input is the same. New items using existing pictures (armors/belt/helms from original game) will have coords filled in automatically, custom ones must be supplied manually.
 
 -- when you want to assign coords, you can assign a two-layered table to specific item id and it'll work just fine. See below for example. If you do it, parts having already good coords can be skipped.
 
@@ -986,9 +994,9 @@ function setItemDrawingHooks()
 
     -- needed: belts, helms, armors
 
-    local function getArmorPicsFromName(name)
-        local base = name:match("(.-)icon")
-        assert(base)
+    local function getArmorPicsFromName(id, name, picture)
+        local base = picture:match("(.-)icon")
+        assert(base, format("Couldn't generate required bitmap names for item %d (name %q, picture in items.txt %q)", id, name, picture))
         return base .. "bod", base .. "arm1", base .. "arm2"
     end
 
@@ -996,7 +1004,7 @@ function setItemDrawingHooks()
     local function process()
         for i, item in Game.ItemsTxt do
             if item.EquipStat == const.ItemType.Armor - 1 then
-                local body, arm1, arm2 = getArmorPicsFromName(item.Picture)
+                local body, arm1, arm2 = getArmorPicsFromName(i, item.Name, item.Picture)
                 local baseOff = armorBitmapIds + (i - 1) * 12
                 u4[baseOff] = Game.IconsLod:LoadBitmap(body)
                 u4[baseOff + 4] = Game.IconsLod:LoadBitmap(arm1)
@@ -1021,10 +1029,6 @@ function setItemDrawingHooks()
             end
         end
     end
-
-    -- new bitmaps for belts/helmets/armors are loaded automatically, but they need to have fixed naming scheme:
-    --     for armors: let base name be "MyPlate". Then file name of inventory bitmaps and items.txt picture should be "MyPlateicon", main worn armor part should be "MyPlatebod", 1st arm "MyPlatearm1", 2nd arm "MyPlatearm2".
-    --     for belts: if base name is "MyBelt1" (it needs to end with a number), inventory icon should be "MyBelt1a", and belt on paperdoll should have file name "MyBelt1b"
 
     callWhenGameInitialized(process)
 
