@@ -20,7 +20,7 @@ Items = Items or {} -- global containing item tools
 -- evt.StdBonusStrengthRanges allows you to change default bonuses power. Table is indexed first by treasure level (1-6) and then by either 0 or 1 (lower or upper bound). When you simply index it, you get current value. When you assign to it, that range bound is modified (note that no checks are made for invalid ranges, they might crash the game). You can also assign an array with two fields to set both range ends at once.
 -- examples:
 --[[
-    -- TODO: Low, End, LowEnd fields, newindex, index etc.
+    
 ]]
 
 -- evt.CanItemBeRandomlyFound decides, well, whether the item can be found :) It's indexed by item id. When you set false, item can't be generated randomly no matter what. Custom items are set to true by default (if they have nonzero rnditems.txt chances)
@@ -542,7 +542,6 @@ do
             DataTables.ComputeRowCountInPChar(u4[stdItemsTxtDataPtr], 1, 1) - 4, DataTables.ComputeRowCountInPChar(u4[spcItemsTxtDataPtr], 1, 2) - 11
         local potionTxtRowCount = DataTables.ComputeRowCountInPChar(u4[useItemsTxtDataPtr], 0, 2) - 9 -- the file for this is useItems.txt
         local potionTxtCount = itemCount -- my change
-        -- TODO: potion txt offset computation uses hardcoded 29 value, it might have not been replaced
         local potionTxtCols, potionTxtColIds = 0, {}
         do
             local t = mem.string(u4[useItemsTxtDataPtr]):split("\r\n")
@@ -641,7 +640,6 @@ do
         asmpatch(0x4465E4, "mov dword ptr [esp+0x14]," .. potionTxtRowCount - 1)
 
         -- PotionTxt: CHANGE TO USE WORD INSTEAD OF BYTE
-        -- TODO: if any column or row intersecting item has nonzero value, automatically make item mixable?
         -- also use dynamic column-itemId map (and support missing columns)
         potionTxtHooks.asmpatch(0x446641, [[
             lea ecx, [ebx - 6]
@@ -1146,6 +1144,7 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
                 if val ~= nil then
                     local new = memArr[obj["?ptr"] + o]
                     if new ~= old then
+                        -- if using array, then obj is array address, so "o" is offset from the beginning of array, otherwise it's offset from structure start
                         local index = array and (o / size) or ((o - arrayOrigin) / size)
                         index = index + firstIndex
                         bindTo[index] = bindTo[index] + (new - old)
@@ -1176,6 +1175,7 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
         local function getOffset(key)
             local offsets = {["Standard"] = 0, ["Special"] = 6 * 4, ["SpecialPercentage"] = 6 * 4 * 2}
             local off = sums + (offsets[key] or error(format("Invalid index %q", key), 3))
+            return off
         end
         evt.RndItemsBonusChanceByLevel = setmetatable({}, {
             __index = function(t, i)
@@ -1218,37 +1218,77 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
 
     local enchOffset = 0x84
     do
+        -- TODO: Low, End, LowEnd fields, newindex, index etc.
         local accessorsCache = {}
-        evt.StdBonusStrengthRanges = setmetatable({}, {__index = function(t, i)
-            assert(i >= 1 and i <= 6, "Invalid treasure level")
-            local ret = accessorsCache[i]
-            if not ret then
-                ret = setmetatable({}, {__index = function(_, j)
-                    checkIndex(j, 0, 1, 2)
-                    return u4[enchantmentDataOffset + enchOffset + (i - 1) * 8 + j * 4]
-                end, __newindex = function(self, j, val)
-                    checkIndex(j, 0, 1, 2)
-                    -- commented out, because could break assigning table of values
-                    -- if index == 0 then
-                    --     assert(val <= self[1], "Invalid range (%d-%d)", val, self[1])
-                    -- elseif index == 1 then
-                    --     assert(val >= self[0], "Invalid range (%d-%d)", self[1], val)
-                    -- end
-                    u4[enchantmentDataOffset + enchOffset + (i - 1) * 8 + j * 4] = val
-                end})
-                accessorsCache[i] = ret
+        local rangePartTable = {Low = 0, Min = 0, High = 1, Max = 1, LowHigh = 2, MinMax = 2, Range = 2, Full = 2}
+        evt.StdBonusStrengthRanges = setmetatable({}, {
+            __index = function(self, i)
+                checkIndex(i, 1, 6, 2, "Invalid treasure level")
+                local ret = accessorsCache[i]
+                if not ret then
+                    local function index(_, rangePart, val)
+                        local idx
+                        if type(rangePart) == "number" then
+                            checkIndex(rangePart, 0, 2, 3)
+                            idx = rangePart
+                        else
+                            local what = rangePartTable[rangePart]
+                            if not what then
+                                error(format("Invalid index %q", rangePart), 2)
+                            end
+                            idx = what
+                        end
+
+                        local baseOff = enchantmentDataOffset + enchOffset + (i - 1) * 8
+                        if val == nil then
+                            local low, high = u4[baseOff], u4[baseOff + 4]
+                            local rets = {low, high, {low, high}}
+                            return rets[idx + 1]
+                        end
+
+                        if idx == 0 then
+                            u4[baseOff] = val
+                        elseif idx == 1 then
+                            u4[baseOff + 4] = val
+                        elseif idx == 2 then
+                            if type(val) ~= "table" then
+                                error(format("Table value expected, got %s", type(val)), 2)
+                            end
+                            local minIndex = val[0] ~= nil and 0 or 1
+                            if not val[minIndex] or not val[minIndex + 1] then
+                                error("Table needs to have at least 2 values, starting from 0 or 1", 2)
+                            end
+                            u4[baseOff], u4[baseOff + 4] = val[minIndex], val[minIndex + 1]
+                        end
+                    end
+                    ret = setmetatable({}, {__index = index, __newindex = index})
+                    accessorsCache[i] = ret
+                end
+                return ret
+            end,
+            __newindex = function(self, treasureLevel, val)
+                checkIndex(treasureLevel, 1, 6, 2)
+                if type(val) == "number" then -- identical range ends
+                    local a = self[treasureLevel]
+                    a.Low, a.High = val, val
+                else -- assume table
+                    self[treasureLevel].LowHigh = val
+                end
             end
-            return ret
-        end,
-        __newindex = function(t, i, val)
-            if type(val) ~= "table" then
-                error("Table value expected", 2)
-            elseif #val < 2 then
-                error("Table must have at least 2 values, starting from index 1", 2)
-            end
-            t[i][0] = val[1]
-            t[i][1] = val[2]
-        end})
+        })
+        -- local range = evt.StdBonusStrengthRanges[2]
+        -- supported low end indexes: range[0], range.Min, range.Low
+        -- supported high end indexes: range[1], range.Max, range.High
+        -- supported full range indexes: range[2], range.LowHigh, range.MinMax, range.Range, range.Full
+        -- evt.StdBonusStrengthRanges[2] = {3, 4}
+        -- evt.StdBonusStrengthRanges[5].LowHigh = {3, 4}
+        -- local ranges = evt.StdBonusStrengthRanges
+
+        -- local low, high = unpack(ranges[3].MinMax)
+        -- warning: assigning new values to returned table won't work, you need to use this instead:
+        -- ranges[3].MinMax = {low + 1, high + 5}
+        -- ranges[4].Low = math.max(20, ranges[4].Low) -- note: range might become invalid without adjusting upper end
+        -- ranges[4].Max = ranges[4].Low -- now it should be ok
     end
 
     do
@@ -1407,13 +1447,70 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
         return showbonus(false, i, slot, useName)
     end
 
-    callWhenGameInitialized(function()
-        for _, itemIndex in ipairs{3, 24, 53, 71, 80, 200, 222, 223, 321, 360, 450} do
+    local function runTests()
+        -- 1. test rnditems array
+        for _, itemIndex in ipairs{1, 3, 24, 53, 71, 80, 200, 222, 223, 321, 360, 450, itemCount - 200, itemCount - 133, itemCount - 71, itemCount - 3, itemCount - 1} do
+            local itemTxt, myArr = Game.ItemsTxt[itemIndex], evt.RndItemsChanceSums
+            for _, treasureLevel in ipairs{1, 3, 4, 6} do
+                for _, add in ipairs{3, 12, -3, 0, 55, -21, -12, 4, 8, 64, -9, 20} do
+                    local oldChance, myVal = itemTxt.ChanceByLevel[treasureLevel], myArr[treasureLevel]
+                    itemTxt.ChanceByLevel[treasureLevel] = oldChance + add
+                    assert(itemTxt.ChanceByLevel[treasureLevel] == oldChance + add)
+                    assert(myArr[treasureLevel] == myVal + add)
+                end
+            end
+        end
 
+        -- 2. test std bonus strength ranges
+        local ranges = evt.StdBonusStrengthRanges
+        -- fail test
+        local ok = pcall(function() local x = ranges[0] end)
+        assert(not ok)
+        ok = pcall(function() local x = ranges[7] end)
+        assert(not ok)
+        for treasureLevel = 1, 6 do
+            local function testIndexes(low, high)
+                local range = ranges[treasureLevel]
+                local oldLow, oldHigh = range.Low, range.High
+                if low then
+                    assert(oldLow == low)
+                end
+                if high then
+                    assert(oldHigh == high)
+                end
+                assert(oldLow == range[0])
+                assert(oldHigh == range[1])
+                assert(oldLow == range.Low)
+                assert(oldLow == range.Min)
+                assert(oldHigh == range.High)
+                assert(oldHigh == range.Max)
+                local tableLow, tableHigh = unpack(range.LowHigh)
+                local tableLow2, tableHigh2 = unpack(range[2])
+                assert(oldLow == tableLow and tableLow == tableLow2)
+                assert(oldHigh == tableHigh and tableHigh == tableHigh2)
+            end
+            for _, low in ipairs{1, 4, 6, 9, 10, 14, 16, 34, 65, 122} do
+                for _, high in ipairs{1, 2, 5, 6, 14, 15, 22, 33, 49, 72, 143} do
+                    testIndexes()
+                    ranges[treasureLevel].LowHigh = {low, high}
+                    testIndexes(low, high)
+                    ranges[treasureLevel] = {3, 5}
+                    testIndexes(3, 5)
+                    ranges[treasureLevel].Low = 10
+                    testIndexes(10, 5)
+                    ranges[treasureLevel].MinMax = {2, 222}
+                    testIndexes(2, 222)
+                    ranges[treasureLevel].Max = 15
+                    ranges[treasureLevel].Min = 22
+                    testIndexes(22, 15)
+                    ranges[treasureLevel].Range = {77, 111}
+                    testIndexes(77, 111)
+                end
+            end
         end
 
         local std, spc = Game.StdItemsTxt, Game.SpcItemsTxt
-        -- 1. test std/spc arrays
+        -- 3. test std/spc arrays
         for _, gameArr in ipairs{std, spc} do
             local isStd = gameArr == std
             local count = isStd and 9 or 12
@@ -1465,7 +1562,8 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
                 end
             end
         end
-    end)
+    end
+    callWhenGameInitialized(runTests)
 end
 
 function setAlchemyHooks(itemCount)
@@ -1473,8 +1571,11 @@ function setAlchemyHooks(itemCount)
 
     -- items that activate potion mixing code
     local isItemMixableBuf = StaticAlloc(itemCount)
-    mem.fill(isItemMixableBuf, itemCount, 0)
-    mem.fill(isItemMixableBuf + 160 - 1, 29, 1)
+    -- decided to make every item mixable, because if both entries have 0 (that is, have "no" or simply are missing from useitems.txt)
+    -- they won't be able to be mixed anyway. If this has unintended consequences, will be adjusted
+    --mem.fill(isItemMixableBuf, itemCount, 0)
+    --mem.fill(isItemMixableBuf + 160 - 1, 29, 1)
+    mem.fill(isItemMixableBuf, itemCount, 1)
 
     evt.IsItemMixable = makeMemoryTogglerTable{arr = u1, size = 1, buf = isItemMixableBuf, bool = true,
         minIndex = 1, maxIndex = itemCount, errorFormat = "Invalid item id"}
