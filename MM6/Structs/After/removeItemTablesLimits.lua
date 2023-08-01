@@ -45,6 +45,12 @@ Items = Items or {} -- global containing item tools
     ranges[3].Range = {low + 5, low + 15}
 ]]
 
+-- new event: GetItemName
+-- parameters:
+    -- IdentifiedNameOnly -> if true, means that function should only set full item names (when item is identified). If false, vanilla logic expects that you'll provide unidentified name (it's not binding though).
+    -- Item -> item whose name is being obtained,
+    -- Name -> default name from vanilla code
+
 -- ALCHEMY
 
 -- Items.IsItemMixable is an array of booleans indexed by item id. Value indicates whether item with given id is mixable (activates potion mixing code).
@@ -65,7 +71,14 @@ Items = Items or {} -- global containing item tools
 --     CheckCombination(id1, id2) -> utility function. Returns true if one of mouse or rightclicked potions has first id, and another one has second id, no matter which potion is held by mouse.
 
 -- example:
---[[
+--[=[
+    local superResistance, magicPotion, divinePower, protection, curePoison, resistance = 173, 165, 178, 167, 169, 168
+    local pots = {173, 165, 178, 167, 169, 168}
+    for i, pot in ipairs(pots) do
+        for j = 1, 5 do
+            evt.GiveItem{Id = pot}
+        end
+    end
     function events.MixPotion(t)
         local idMouse, idClicked = t.MousePotion.Number, t.ClickedPotion.Number
         if idMouse == superResistance then
@@ -85,7 +98,15 @@ Items = Items or {} -- global containing item tools
             t.Handled = true -- do nothing at all
         end
     end
-]]
+]=]
+
+-- new event: DrinkPotion
+-- parameters:
+--     CannotDrink -> If this is true: message "item cannot be used that way" is displayed and item is not consumed. TODO: allow changing message
+--     Handled -> If this is true: don't run vanilla potion logic, but make drink sound, add recovery and remove mouse item. Otherwise, if it's false, full vanilla code runs (in addition to your handler)
+--     Player -> drinking player,
+--     Potion -> the item being drunk. Note: as of now called only for items whose EquipStat is "Bottle", "Herb" uses other code
+--     MakeFaceAnimation() -> makes drinking face animation.
 
 -- HELP END --
 
@@ -1482,7 +1503,7 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
 
     -- tests
     local slotNames = table.invert(spcBonusSlotNames)
-    function showbonus(std, i, slot, useName)
+    local function showbonus(std, i, slot, useName)
         local arr, myarr = std and Game.StdItemsTxt or Game.SpcItemsTxt, std and Items.StdBonusChanceSums or Items.SpcBonusChanceSums
         if useName then
             local name = slotNames[slot + (std and 3 or 0)]
