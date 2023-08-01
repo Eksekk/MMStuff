@@ -47,9 +47,18 @@ Items = Items or {} -- global containing item tools
 
 -- new event: GetItemName
 -- parameters:
-    -- IdentifiedNameOnly -> if true, means that function should only set full item names (when item is identified). If false, vanilla logic expects that you'll provide unidentified name (it's not binding though).
+    -- IdentifiedNameOnly -> if true, means that function should only set full item names (when item is identified). If false, vanilla logic expects that you'll provide unidentified name if item is not identified (it's not binding though).
     -- Item -> item whose name is being obtained,
     -- Name -> default name from vanilla code
+
+-- example:
+--[[
+    function events.GetItemName(t)
+        if t.Item:T().EquipStat == const.ItemType.Potion - 1 then
+            t.Name = t.Item:T().Name
+        end
+    end
+]]
 
 -- ALCHEMY
 
@@ -107,6 +116,37 @@ Items = Items or {} -- global containing item tools
 --     Player -> drinking player,
 --     Potion -> the item being drunk. Note: as of now called only for items whose EquipStat is "Bottle", "Herb" uses other code
 --     MakeFaceAnimation() -> makes drinking face animation.
+
+-- NEW ITEM BITMAPS --
+
+-- Items.PaperdollArmorCoords - this table allows you setting custom armor coordinates. It has three "layers": 
+--     1. First layer is indexed by item id. You get back a table...
+--     2. Which can be indexed with either "Body" or 1, "LeftArm" or 2, and "RightArm" or 3 to get setter/getter table for coords of specific armor body part. The new table...
+--     3. Can be indexed with X or 1, Y or 2, and XY or 3. If you simply index, you get current value (as number in first two cases, as table in third). When you assign to it, expected input is the same. New items using existing pictures will have coords filled in automatically, custom ones must be supplied manually.
+
+-- when you want to assign coords, you can assign a two-layered table to specific item id and it'll work just fine. See below for example. If you do it, parts having already good coords can be skipped.
+
+-- once you assign any coords to an item, it will use those coords. To restore vanilla coords (only for vanilla items, others will crash!), execute function PaperdollArmorCoords.ClearCustomCoords(itemId)
+
+--[[
+    example usage:
+    local goldenPlateId = 78
+    local coords = Items.PaperdollArmorCoords
+    local plate = coords[goldenPlateId]
+    local x, y = unpack(plate.Body.XY)
+    -- or:
+    ---- local x = plate.Body.X
+    ---- local y = plate.Body.Y
+    coords[goldenPlateId] = { -- this WOULDN'T work: "plate = {...}", you need to assign key to table directly
+        Body = {X = 50, Y = 30},
+        LeftArm = {x, Y = 30}
+        RightArm = {20, 20}
+    }
+    local coords2 = coords[72]
+    coords2.Body.XY = coords2.Body.X + 20, coords2.Body.Y + 50
+    coords2.RightArm[1] = 88 -- same as X
+    coords2.LeftArm[2] = plate.Body.Y -- same as Y
+]]
 
 -- HELP END --
 
@@ -982,6 +1022,10 @@ function setItemDrawingHooks()
         end
     end
 
+    -- new bitmaps for belts/helmets/armors are loaded automatically, but they need to have fixed naming scheme:
+    --     for armors: let base name be "MyPlate". Then file name of inventory bitmaps and items.txt picture should be "MyPlateicon", main worn armor part should be "MyPlatebod", 1st arm "MyPlatearm1", 2nd arm "MyPlatearm2".
+    --     for belts: if base name is "MyBelt1" (it needs to end with a number), inventory icon should be "MyBelt1a", and belt on paperdoll should have file name "MyBelt1b"
+
     callWhenGameInitialized(process)
 
     local hooks = HookManager{belts = beltBitmapIds, helmets = helmetBitmapIds, armors = armorBitmapIds}
@@ -1004,7 +1048,7 @@ function setItemDrawingHooks()
                     return x
                 elseif what == "y" or what == 2 then
                     return y
-                elseif what == "xy" then
+                elseif what == "xy" or what == 3 then
                     return {x, y}
                 end
             end,
@@ -1016,7 +1060,7 @@ function setItemDrawingHooks()
                     i2[xoff] = val
                 elseif what == "y" or what == 2 then
                     i2[yoff] = val
-                elseif what == "xy" then
+                elseif what == "xy" or what == 3 then
                     i2[xoff], i2[yoff] = val[1], val[2]
                 end
             end
@@ -1047,25 +1091,6 @@ function setItemDrawingHooks()
         })
     end
     Items.PaperdollArmorCoords = paperdollArmorCoords
-    --[[
-        example usage:
-        local goldenPlateId = 78
-        local coords = Items.PaperdollArmorCoords
-        local plate = coords[goldenPlateId]
-        local x, y = unpack(plate.Body.XY)
-        -- or:
-        ---- local x = plate.Body.X
-        ---- local y = plate.Body.Y
-        coords[goldenPlateId] = { -- this WOULDN'T work: "plate = {...}", you need to assign key to table directly
-            Body = {X = 50, Y = 30},
-            LeftArm = {x, Y = 30}
-            RightArm = {20, 20}
-        }
-        local coords2 = coords[72]
-        coords2.Body.XY = coords2.Body.X + 20, coords2.Body.Y + 50
-        coords2.RightArm[1] = 88 -- same as XX
-        coords2.LeftArm[2] = plate.Body.Y -- same as Y
-    ]]
 
     -- default coords for already existing images
     callWhenGameInitialized(function()
