@@ -17,15 +17,31 @@ Items = Items or {} -- global containing item tools
 
 -- HELP --
 
--- evt.StdBonusStrengthRanges allows you to change default bonuses power. Table is indexed first by treasure level (1-6) and then by either 0 or 1 (lower or upper bound). When you simply index it, you get current value. When you assign to it, that range bound is modified (note that no checks are made for invalid ranges, they might crash the game). You can also assign an array with two fields to set both range ends at once.
+-- Items.StdBonusStrengthRanges allows you to change default bonuses power. Table is indexed first by treasure level (1-6) and then by either "Min" or "Max", or by aliases defined below. When you simply index it, you get current value. When you assign to it, that range bound is modified (note that no checks are made for invalid ranges, they might crash the game). You can also assign an array with two fields (either to "MinMax" key or directly to table) to set both range ends at once.
 -- examples:
 --[[
-    
+    local range = Items.StdBonusStrengthRanges[2]
+    -- supported low end indexes: range[0], range.Min, range.Low
+    -- supported high end indexes: range[1], range.Max, range.High
+    -- supported full range indexes: range[2] (only for assignment, returns table without data), range.LowHigh, range.MinMax, range.Range, range.Full
+    Items.StdBonusStrengthRanges[2] = {3, 4}
+    Items.StdBonusStrengthRanges[5].LowHigh = {3, 4}
+    local ranges = Items.StdBonusStrengthRanges
+
+    local low, high = unpack(ranges[3].MinMax)
+    -- warning: assigning new values to returned table won't work, you need to use this instead:
+    ranges[3].MinMax = {low + 1, high + 5}
+    ranges[4].Low = math.max(20, ranges[4].Low) -- note: range might become invalid without adjusting upper end
+    ranges[4].Max = ranges[4].Low -- now it should be ok
+    local low = ranges[2][0]
+    ranges[3].Range = {low + 5, low + 15}
 ]]
 
--- evt.CanItemBeRandomlyFound decides, well, whether the item can be found :) It's indexed by item id. When you set false, item can't be generated randomly no matter what. Custom items are set to true by default (if they have nonzero rnditems.txt chances)
+-- Items.CanItemBeRandomlyFound decides, well, whether the item can be found :) It's indexed by item id. When you set false, item can't be generated randomly no matter what. Custom items are set to true by default (if they have nonzero rnditems.txt chances).
 
 -- rnditems.txt file is slightly changed. You can add rows corresponding to any item defined in items.txt (but you don't need to fill in all rows, unfilled ones will simply be zeroed). You don't need to update total chance sums when changing specific items, they are only informational (it was like that in vanilla).
+
+
 
 -- HELP END --
 
@@ -659,12 +675,18 @@ do
         -- decide result potion by table indexes
         potionTxtHooks.asmpatch(0x410BA9, [[
             ; ecx = rightclicked id, eax = mouse item (first array index)
-            dec ecx
-            shl ecx, 1
-            dec eax
-            imul eax, %count%
             xor ebx, ebx
-            mov bx, [ecx + eax * 2 + %potionTxt%]
+            ; don't crash when holding no item
+            test ecx, ecx
+            je @zero
+            test eax, eax
+            je @zero
+                dec ecx
+                shl ecx, 1
+                dec eax
+                imul eax, %count%
+                mov bx, [ecx + eax * 2 + %potionTxt%]
+            @zero:
         ]], 0xD)
 
         -- get current index from first column
@@ -804,7 +826,7 @@ do
 
         -- 0x448A1F, 0x4497F9, 0x44A70A CONTAIN HIGH OF ITEMS ABLE TO BE GENERATED EXCEPT ARTIFACTS (0x190, 400)
         -- 0x44A6E1 contains last artifact index
-
+        -- 00440D43 - check if is artifact based on item id
         -- asmpatch(0x4497F9, "cmp edi," .. itemCount)
 
         -- random items from all treasure levels
@@ -959,11 +981,11 @@ function setItemDrawingHooks()
             end
         })
     end
-    evt.PaperdollArmorCoords = paperdollArmorCoords
+    Items.PaperdollArmorCoords = paperdollArmorCoords
     --[[
         example usage:
         local goldenPlateId = 78
-        local coords = evt.PaperdollArmorCoords
+        local coords = Items.PaperdollArmorCoords
         local plate = coords[goldenPlateId]
         local x, y = unpack(plate.Body.XY)
         -- or:
@@ -1162,14 +1184,14 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
 
     local rndItemsChanceSums = makeMemoryTogglerTable{arr = u4, size = 4, buf = enchantmentDataOffset,
         minIndex = 1, maxIndex = 6}
-    evt.RndItemsChanceSums = rndItemsChanceSums
+    Items.RndItemsChanceSums = rndItemsChanceSums
 
     bindHandlerWithItemDataArray{array = structs.m.ItemsTxtItem.ChanceByLevel, size = 1, memArr = u1, bindTo = rndItemsChanceSums, firstIndex = 1}
 
-    -- evt.RndItemsBonusChanceByLevel[5].Standard = 50
-    -- evt.RndItemsBonusChanceByLevel[2].Special = 50
-    -- local per = evt.RndItemsBonusChanceByLevel[6].SpecialPercentage
-    -- evt.RndItemsBonusChanceByLevel[6].SpecialPercentage = per + 12
+    -- Items.RndItemsBonusChanceByLevel[5].Standard = 50
+    -- Items.RndItemsBonusChanceByLevel[2].Special = 50
+    -- local per = Items.RndItemsBonusChanceByLevel[6].SpecialPercentage
+    -- Items.RndItemsBonusChanceByLevel[6].SpecialPercentage = per + 12
     do
         local sums = enchantmentDataOffset + 0x18
         local function getOffset(key)
@@ -1177,7 +1199,7 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
             local off = sums + (offsets[key] or error(format("Invalid index %q", key), 3))
             return off
         end
-        evt.RndItemsBonusChanceByLevel = setmetatable({}, {
+        Items.RndItemsBonusChanceByLevel = setmetatable({}, {
             __index = function(t, i)
                 checkIndex(i, 1, 6, 2)
                 local tab = setmetatable({}, {
@@ -1202,12 +1224,12 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
     for k, v in pairs(stdBonusSlotNames) do
         stdBonusSlotNames[k] = v - 3 -- std bonuses don't use three lower values
     end
-    evt.StdBonusSlotNames = stdBonusSlotNames
-    evt.SpcBonusSlotNames = spcBonusSlotNames
+    Items.StdBonusSlotNames = stdBonusSlotNames
+    Items.SpcBonusSlotNames = spcBonusSlotNames
 
     do
         local sums = makeMemoryTogglerTable{arr = u4, size = 4, buf = enchantmentDataOffset + 0x60, minIndex = 0, maxIndex = 8, aliases = stdBonusSlotNames}
-        evt.StdBonusChanceSums = sums
+        Items.StdBonusChanceSums = sums
         local members = structs.m.StdItemsTxtItem
         bindHandlerWithItemDataArray{array = members.ChanceForSlot, size = 1, memArr = u1, bindTo = sums}
         for mname in pairs(stdBonusSlotNames) do
@@ -1218,10 +1240,9 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
 
     local enchOffset = 0x84
     do
-        -- TODO: Low, End, LowEnd fields, newindex, index etc.
         local accessorsCache = {}
         local rangePartTable = {Low = 0, Min = 0, High = 1, Max = 1, LowHigh = 2, MinMax = 2, Range = 2, Full = 2}
-        evt.StdBonusStrengthRanges = setmetatable({}, {
+        Items.StdBonusStrengthRanges = setmetatable({}, {
             __index = function(self, i)
                 checkIndex(i, 1, 6, 2, "Invalid treasure level")
                 local ret = accessorsCache[i]
@@ -1276,25 +1297,12 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
                 end
             end
         })
-        -- local range = evt.StdBonusStrengthRanges[2]
-        -- supported low end indexes: range[0], range.Min, range.Low
-        -- supported high end indexes: range[1], range.Max, range.High
-        -- supported full range indexes: range[2], range.LowHigh, range.MinMax, range.Range, range.Full
-        -- evt.StdBonusStrengthRanges[2] = {3, 4}
-        -- evt.StdBonusStrengthRanges[5].LowHigh = {3, 4}
-        -- local ranges = evt.StdBonusStrengthRanges
-
-        -- local low, high = unpack(ranges[3].MinMax)
-        -- warning: assigning new values to returned table won't work, you need to use this instead:
-        -- ranges[3].MinMax = {low + 1, high + 5}
-        -- ranges[4].Low = math.max(20, ranges[4].Low) -- note: range might become invalid without adjusting upper end
-        -- ranges[4].Max = ranges[4].Low -- now it should be ok
     end
 
     do
         local sums = makeMemoryTogglerTable{arr = u4, size = 4, buf = enchantmentDataOffset + 0xB4,
         minIndex = 0, maxIndex = 11, aliases = spcBonusSlotNames}
-        evt.SpcBonusChanceSums = sums
+        Items.SpcBonusChanceSums = sums
         local members = structs.m.SpcItemsTxtItem
         bindHandlerWithItemDataArray{array = members.ChanceForSlot, size = 1, memArr = u1, bindTo = sums}
         for mname in pairs(spcBonusSlotNames) do
@@ -1303,8 +1311,7 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
         end
     end
 
-    -- can item be generated, TODO: patch all instances
-    -- some unpatched: evt.GiveItem
+    -- can item be generated
     do
         local buf = StaticAlloc(itemCount)
         mem.fill(buf, 400, 1) -- normal items
@@ -1312,7 +1319,7 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
         local canBeFound = makeMemoryTogglerTable{buf = buf, arr = u1, size = 1, minIndex = 1, maxIndex = itemCount,
             bool = true}
         -- if value at index idx is 0, item idx cannot be generated (artifacts and quest items by default), otherwise it can
-        evt.CanItemBeRandomlyFound = canBeFound
+        Items.CanItemBeRandomlyFound = canBeFound
         HookManager{
             buf = buf, itemCount = itemCount, 
         }.asmpatch(0x448A1C, [[
@@ -1364,7 +1371,7 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
             end
         end)
     end
-    --evt.CanItemBeRandomlyFound[591] = true; tryGetMouseItem(591, 6)
+    --Items.CanItemBeRandomlyFound[591] = true; tryGetMouseItem(591, 6)
     mem.hookfunction(0x44A6B0, 1, 0, function(d, def, itemPtr)
         local item = structs.Item:new(itemPtr)
         local t = {Item = item, Allow = true}
@@ -1432,7 +1439,7 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
     -- tests
     local slotNames = table.invert(spcBonusSlotNames)
     function showbonus(std, i, slot, useName)
-        local arr, myarr = std and Game.StdItemsTxt or Game.SpcItemsTxt, std and evt.StdBonusChanceSums or evt.SpcBonusChanceSums
+        local arr, myarr = std and Game.StdItemsTxt or Game.SpcItemsTxt, std and Items.StdBonusChanceSums or Items.SpcBonusChanceSums
         if useName then
             local name = slotNames[slot + (std and 3 or 0)]
             return arr[i][name], myarr[name]
@@ -1450,7 +1457,7 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
     local function runTests()
         -- 1. test rnditems array
         for _, itemIndex in ipairs{1, 3, 24, 53, 71, 80, 200, 222, 223, 321, 360, 450, itemCount - 200, itemCount - 133, itemCount - 71, itemCount - 3, itemCount - 1} do
-            local itemTxt, myArr = Game.ItemsTxt[itemIndex], evt.RndItemsChanceSums
+            local itemTxt, myArr = Game.ItemsTxt[itemIndex], Items.RndItemsChanceSums
             for _, treasureLevel in ipairs{1, 3, 4, 6} do
                 for _, add in ipairs{3, 12, -3, 0, 55, -21, -12, 4, 8, 64, -9, 20} do
                     local oldChance, myVal = itemTxt.ChanceByLevel[treasureLevel], myArr[treasureLevel]
@@ -1462,7 +1469,7 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
         end
 
         -- 2. test std bonus strength ranges
-        local ranges = evt.StdBonusStrengthRanges
+        local ranges = Items.StdBonusStrengthRanges
         -- fail test
         local ok = pcall(function() local x = ranges[0] end)
         assert(not ok)
@@ -1519,7 +1526,7 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
                 local slotName = slotNames[slot + (isStd and 3 or 0)] -- std items doesn't use lower 3 slots (weapons and bow)
                 for _, enchId in ipairs{1, 3, 6, 7, 11, 13, maxEnch - 1, maxEnch} do
                     local entry = gameArr[enchId]
-                    local myArr = isStd and evt.StdBonusChanceSums or evt.SpcBonusChanceSums
+                    local myArr = isStd and Items.StdBonusChanceSums or Items.SpcBonusChanceSums
                     for _, add in ipairs{5, 12, 33, -20, -4, 11, 23, 45, -32, 0, 3, -1, 1} do
                         local myVal = myArr[slot]
                         local oldChance = entry.ChanceForSlot[slot]
@@ -1571,13 +1578,13 @@ function setAlchemyHooks(itemCount)
 
     -- items that activate potion mixing code
     local isItemMixableBuf = StaticAlloc(itemCount)
-    -- decided to make every item mixable, because if both entries have 0 (that is, have "no" or simply are missing from useitems.txt)
+    -- obsolete: decided to make every item mixable, because if both entries have 0 (that is, have "no" or simply are missing from useitems.txt)
     -- they won't be able to be mixed anyway. If this has unintended consequences, will be adjusted
-    --mem.fill(isItemMixableBuf, itemCount, 0)
-    --mem.fill(isItemMixableBuf + 160 - 1, 29, 1)
-    mem.fill(isItemMixableBuf, itemCount, 1)
+    mem.fill(isItemMixableBuf, itemCount, 0)
+    mem.fill(isItemMixableBuf + 160 - 1, 29, 1)
+    --mem.fill(isItemMixableBuf, itemCount, 1)
 
-    evt.IsItemMixable = makeMemoryTogglerTable{arr = u1, size = 1, buf = isItemMixableBuf, bool = true,
+    Items.IsItemMixable = makeMemoryTogglerTable{arr = u1, size = 1, buf = isItemMixableBuf, bool = true,
         minIndex = 1, maxIndex = itemCount, errorFormat = "Invalid item id"}
     
     local hooks = HookManager()
@@ -1598,7 +1605,7 @@ function setAlchemyHooks(itemCount)
     mem.fill(isItemPotionBottleBuf, itemCount, 0)
     u1[isItemPotionBottleBuf + 162] = 1
     mem.fill(isItemPotionBottleBuf + 188, 8, 1)
-    evt.IsItemPotionBottle = makeMemoryTogglerTable{arr = u1, size = 1, buf = isItemPotionBottleBuf, bool = true, 
+    Items.IsItemPotionBottle = makeMemoryTogglerTable{arr = u1, size = 1, buf = isItemPotionBottleBuf, bool = true, 
         minIndex = 1, maxIndex = itemCount, errorFormat = "Invalid item id"}
     hooks.ref.isItemPotionBottle = HookManager{
         buf = isItemPotionBottleBuf
@@ -1616,7 +1623,7 @@ function setAlchemyHooks(itemCount)
     local isItemPotionBuf = StaticAlloc(itemCount)
     mem.fill(isItemPotionBuf, itemCount, 0)
     mem.fill(isItemPotionBuf + 163, 25, 1)
-    evt.IsItemPotion = makeMemoryTogglerTable{arr = u1, size = 1, buf = isItemPotionBuf, bool = true,
+    Items.IsItemPotion = makeMemoryTogglerTable{arr = u1, size = 1, buf = isItemPotionBuf, bool = true,
         minIndex = 1, maxIndex = itemCount, errorFormat = "Invalid item id"}
     hooks.ref.isItemPotion = HookManager{
         buf = isItemPotionBuf
@@ -1674,6 +1681,9 @@ function setAlchemyHooks(itemCount)
     local customMixResult, newPotionId, newPower = potionBuf, potionBuf + 1, potionBuf + 5
     hook(0x410BA2, function(d)
         local clicked, mouse = structs.Item:new(d.edi), Mouse.Item
+        if clicked.Number == 0 or mouse.Number == 0 then -- don't crash when holding no item
+            return
+        end
         -- set result to false to restrict mixing, 0 lets vanilla code select new potion (will probably crash for nonstandard ones)
         local t = {ClickedPotion = clicked, MousePotion = mouse, Player = GetPlayer(d.esi), Handled = false, Result = 0, ResultPower = 0, Explosion = false, PotionTxtResult = Game.PotionTxt[mouse.Number][clicked.Number]}
         t.ClickedPower, t.MousePower = t.ClickedPotion.Bonus, t.MousePotion.Bonus
