@@ -17,6 +17,14 @@ Items = Items or {} -- global containing item tools
 
 -- HELP --
 
+-- Items.CanItemBeRandomlyFound decides, well, whether the item can be found :) It's indexed by item id. When you set false, item can't be generated randomly no matter what. Custom items are set to true by default (if they have nonzero rnditems.txt chances).
+
+-- rnditems.txt file is slightly changed. You can add rows corresponding to any item defined in items.txt (but you don't need to fill in all rows, unfilled ones will simply be zeroed). You don't need to update total chance sums when changing specific items, they are only informational (it was like that in vanilla).
+
+-- Items.RndItemsChanceSums allows you to modify column sums from rnditems.txt. You don't need to do it though, I have done so that changing ChanceByLevel field or fields like "Arm", "Shld" etc. will automatically change corresponding chances.
+
+-- like above, there's also Items.StdBonusChanceSums and Items.SpcBonusChanceSums. You don't need to modify them either.
+
 -- Items.StdBonusStrengthRanges allows you to change default bonuses power. Table is indexed first by treasure level (1-6) and then by either "Min" or "Max", or by aliases defined below. When you simply index it, you get current value. When you assign to it, that range bound is modified (note that no checks are made for invalid ranges, they might crash the game). You can also assign an array with two fields (either to "MinMax" key or directly to table) to set both range ends at once.
 -- examples:
 --[[
@@ -37,11 +45,47 @@ Items = Items or {} -- global containing item tools
     ranges[3].Range = {low + 5, low + 15}
 ]]
 
--- Items.CanItemBeRandomlyFound decides, well, whether the item can be found :) It's indexed by item id. When you set false, item can't be generated randomly no matter what. Custom items are set to true by default (if they have nonzero rnditems.txt chances).
+-- ALCHEMY
 
--- rnditems.txt file is slightly changed. You can add rows corresponding to any item defined in items.txt (but you don't need to fill in all rows, unfilled ones will simply be zeroed). You don't need to update total chance sums when changing specific items, they are only informational (it was like that in vanilla).
+-- Items.IsItemMixable is an array of booleans indexed by item id. Value indicates whether item with given id is mixable (activates potion mixing code).
+-- Items.IsItemPotionBottle (format same as above) determines if item is a potion bottle. Items which are true there will be changed into basic empty bottle (item id 163) on any potion mix attempt. No, I don't know why there are multiple potion bottles.
+-- Items.IsItemPotion determines whether item is a potion. Atm it's not used, intended to distinguish reagents from actual potions.
 
+-- new event: MixPotion
+-- parameters:
+--     Result -> item id of result potion. If 0, vanilla code runs and selects new item id. If false, mix cannot be performed (item tooltip is shown)
+--     ClickedPower -> power ("Bonus" field) of clicked potion
+--     MousePower -> power of mouse potion,
+--     ClickedPotion -> rightclicked item,
+--     MousePotion -> mouse item,
+--     Player -> player doing the mixing,
+--     Handled -> If it's true, nothing is done at all, (mouse item is not removed, item tooltip is not shown, it's as if you didn't rightclick),
+--     ResultPower -> power of result potion (0 by default),
+--     Explosion -> if it's nonzero, makes mix attempt result in explosion with specified power (range of powers: [1-4])
+--     CheckCombination(id1, id2) -> utility function. Returns true if one of mouse or rightclicked potions has first id, and another one has second id, no matter which potion is held by mouse.
 
+-- example:
+--[[
+    function events.MixPotion(t)
+        local idMouse, idClicked = t.MousePotion.Number, t.ClickedPotion.Number
+        if idMouse == superResistance then
+            t.Result = magicPotion
+            t.ResultPower = random(5, 24)
+        elseif idMouse == magicPotion and idClicked == magicPotion then
+            t.Result = divinePower
+            t.ResultPower = random(100, 200)
+        elseif t.CheckCombination(protection, curePoison) then
+            t.Result = math.random(2) == 1 and divinePower or resistance
+            t.ResultPower = 0
+        elseif t.CheckCombination(magicPotion, protection) then
+            t.Explosion = 4
+        elseif t.CheckCombination(curePoison, magicPotion) then
+            t.Result = false -- cannot mix
+        elseif t.CheckCombination(curePoison, curePoison) then
+            t.Handled = true -- do nothing at all
+        end
+    end
+]]
 
 -- HELP END --
 
@@ -1224,8 +1268,8 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
     for k, v in pairs(stdBonusSlotNames) do
         stdBonusSlotNames[k] = v - 3 -- std bonuses don't use three lower values
     end
-    Items.StdBonusSlotNames = stdBonusSlotNames
-    Items.SpcBonusSlotNames = spcBonusSlotNames
+    -- Items.StdBonusSlotNames = stdBonusSlotNames
+    -- Items.SpcBonusSlotNames = spcBonusSlotNames
 
     do
         local sums = makeMemoryTogglerTable{arr = u4, size = 4, buf = enchantmentDataOffset + 0x60, minIndex = 0, maxIndex = 8, aliases = stdBonusSlotNames}
@@ -1693,7 +1737,7 @@ function setAlchemyHooks(itemCount)
         events.cocall("MixPotion", t)
         u1[customMixResult] = 0
         if t.Handled then
-            u4[d.esp] = 0x411028
+            u4[d.esp] = 0x411028 -- exit, don't show item tooltip
         elseif t.Explosion then
             assert(t.Explosion >= 1 and t.Explosion <= 4, "Explosion power must be in [1, 4] range")
             d.ebx = t.Explosion
