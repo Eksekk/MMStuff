@@ -80,7 +80,7 @@ Items = Items or {} -- global containing item tools
 
 -- Items.IsItemMixable is an array of booleans indexed by item id. Value indicates whether item with given id is mixable (activates potion mixing code).
 -- Items.IsItemPotionBottle (format same as above) determines if item is a potion bottle. Items which are true there will be changed into basic empty bottle (item id 163) on any potion mix attempt. No, I don't know why there are multiple potion bottles.
--- Items.IsItemPotion determines whether item is a potion. Atm it's not used, intended to distinguish reagents from actual potions.
+-- Items.IsItemPotion determines whether item is a potion. It's not used by vanilla, I use it for determining whether item can have "power" (bonus field) displayed
 
 -- new event: MixPotion(t)
 -- parameters:
@@ -163,7 +163,7 @@ Items = Items or {} -- global containing item tools
     ---- local y = plate.Body.Y
     coords[goldenPlateId] = { -- this WOULDN'T work: "plate = {...}", you need to assign key to table directly
         Body = {X = 50, Y = 30},
-        ArmOneHanded = {x, Y = 30}
+        ArmOneHanded = {x, Y = 30} -- can mix key types
         ArmTwoHanded = {20, 20}
     }
     local coords2 = coords[72]
@@ -189,10 +189,10 @@ end
 
 local function checkIndex(index, minIndex, maxIndex, level, formatStr)
     if index < minIndex or index > maxIndex then
-        error(format(formatStr or "Index %d out of bounds [%d, %d]", index, minIndex, maxIndex), level + 1)
+        error(format(formatStr or "Index (%d) out of bounds [%d, %d]", index, minIndex, maxIndex), level + 1)
     end
 end
-    
+
 local function makeMemoryTogglerTable(t)
     local arr, buf, minIndex, maxIndex = t.arr, t.buf, t.minIndex, t.maxIndex
     local bool, errorFormat, size, minValue, maxValue = t.bool, t.errorFormat, t.size, t.minValue, t.maxValue
@@ -279,6 +279,30 @@ local function getSpellQueueData(spellQueuePtr, targetPtr)
 		t[targetIdKey], t.Target = pl:GetIndex(), pl
 	end
 	return t
+end
+
+function testItemGeneration()
+    local item = Mouse.Item
+    for _, itemType in pairs(const.ItemType) do
+        for treasureLevel = 1, 6 do
+            for cnt = 1, 1000 do
+                item:Randomize(treasureLevel, itemType)
+            end
+        end
+    end
+end
+
+function tryGetMouseItem(id, lev)
+    local typ = Game.ItemsTxt[id].EquipStat + 1
+    local item = Mouse.Item
+    for c = 1, 10000 do
+        item:Randomize(lev, typ)
+        if item.Number == id then
+            print(true, c)
+            return
+        end
+    end
+    print(false)
 end
 
 function arrayFieldOffsetName(arr, offset)
@@ -447,7 +471,6 @@ local function processReferencesTable(args)
             -- special refs
             local what = cmdSize
             local memArr = addresses.arr or i4
-            local relativeOrigin = addresses.origin
             for cmdSize, addresses in pairs(addresses) do
                 if what == "relative" then
                     local function checkRelative(old, new, cmdSize, i)
@@ -529,6 +552,7 @@ do
         [2] = {0x4256CE, 0x425987, 0x425C2A},
         [3] = {0x41CB34, 0x4256F7, 0x4259B0, 0x425C53, 0x44870B},
         limit = {
+            [1] = {0x449C46},
             [4] = {0x449B3B}
         },
         relative = {
@@ -704,10 +728,6 @@ do
         for i, v in ipairs(potionTxtColIds) do
             u4[potionTxtColIdMap + (i - 1) * 4] = v
         end
-
-        -- FIXME: test helm can get "dragon slayer" enchantment
-
-        local origItemDataOffset = Game.ItemsTxt["?ptr"] - 4 -- -4 for size field
 
         local itemsSize, stdItemsSize, spcItemsSize, potionTxtSize = itemCount * Game.ItemsTxt.ItemSize, stdItemCount * Game.StdItemsTxt.ItemSize, spcItemCount * Game.SpcItemsTxt.ItemSize, potionTxtCount * potionTxtCount * 2
         local newSpace = StaticAlloc(itemsSize + stdItemsSize + spcItemsSize + potionTxtSize + 0x3A40)
@@ -966,30 +986,6 @@ do
 
         setItemDrawingHooks()
 
-        function testItemGeneration()
-            local item = Mouse.Item
-            for _, itemType in pairs(const.ItemType) do
-                for treasureLevel = 1, 6 do
-                    for cnt = 1, 1000 do
-                        item:Randomize(treasureLevel, itemType)
-                    end
-                end
-            end
-        end
-
-        function tryGetMouseItem(id, lev)
-            local typ = Game.ItemsTxt[id].EquipStat + 1
-            local item = Mouse.Item
-            for c = 1, 10000 do
-                item:Randomize(lev, typ)
-                if item.Number == id then
-                    print(true, c)
-                    return
-                end
-            end
-            print(false)
-        end
-
         -- TODO: generateArtifact (0x44A6B0)
 
         -- 0x440D43, 0x441891 contains check for artifact added to mouse and if it's artifact, marks as found
@@ -1052,7 +1048,6 @@ function setItemDrawingHooks()
 
     -- armors
 
-    -- checkIndex function for automatic erroring if index is invalid, with stack level to error on, increase by 1 inside
     local armorXYbuf = StaticAlloc(itemCount * 3 * 2 * 2) -- body and both arms
     local armorXYwasSet = StaticAlloc(itemCount * 1)
     local paperdollArmorCoords = {}
@@ -1102,7 +1097,7 @@ function setItemDrawingHooks()
             __newindex = function(self, itemId, val)
                 for i, arrName in ipairs{"Body", "ArmOneHanded", "ArmTwoHanded"} do
                     local a = self[itemId][arrName]
-                    local innerVal = val[arrName] or val[i]
+                    local innerVal = val[arrName] or val[i] or {}
                     for k, v in pairs(innerVal) do
                         a[k] = v
                     end
@@ -1361,7 +1356,7 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
                     local function index(_, rangePart, val)
                         local idx
                         if type(rangePart) == "number" then
-                            checkIndex(rangePart, 0, 2, 3)
+                            checkIndex(rangePart, 0, 2, 2)
                             idx = rangePart
                         else
                             local what = rangePartTable[rangePart]
@@ -1907,7 +1902,7 @@ function setAlchemyHooks(itemCount)
         ; ebx - item pointer
         mov ecx, [ebx]
         call absolute %isItemPotion%
-        mov dl, al
+        mov dl, al ; FIXME: using potentially clobbered register
         mov ecx, [ebx]
         call absolute %isItemPotionBottle%
         or dl, al
