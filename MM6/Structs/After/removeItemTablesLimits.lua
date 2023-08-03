@@ -174,6 +174,8 @@ Items = Items or {} -- global containing item tools
 
 -- HELP END --
 
+-- TODO: de-hardcoding artifacts, wands, scrolls, basically any item group that has special behavior
+
 local function callWhenGameInitialized(f, ...)
     if GameInitialized2 then
         f(...)
@@ -292,17 +294,40 @@ function testItemGeneration()
     end
 end
 
-function tryGetMouseItem(id, lev)
-    local typ = Game.ItemsTxt[id].EquipStat + 1
+local function tryGetItem(lev, field, wantedFieldVal, typ, itemId)
+    --local typ = Game.ItemsTxt[id].EquipStat + 1
     local item = Mouse.Item
     for c = 1, 10000 do
-        item:Randomize(lev, typ)
-        if item.Number == id then
-            print(true, c)
+        local useLev = lev or random(1, 6)
+        item:Randomize(useLev, typ or 0)
+        local hasWantedField
+        if wantedFieldVal ~= nil then
+            hasWantedField = item[field] == wantedFieldVal
+        else
+            hasWantedField = true
+        end
+        local hasItemId
+        if itemId then
+            hasItemId = (item.Number == itemId)
+        else
+            hasItemId = true
+        end
+        if hasWantedField and hasItemId then
+            print(true, useLev, c)
             return
         end
     end
     print(false)
+end
+
+function tryGetMouseItem(id, lev, typ)
+    return tryGetItem(lev, nil, nil, typ, id)
+end
+function tryGetStdBonus(bonus, lev, typ, id)
+    return tryGetItem(lev, "Bonus", bonus, typ, id)
+end
+function tryGetSpcBonus(bonus, lev, typ, id)
+    return tryGetItem(lev, "Bonus2", bonus, typ, id)
 end
 
 function arrayFieldOffsetName(arr, offset)
@@ -524,6 +549,8 @@ do
         ScrollTxt:      low = 0x6A86A8    high = 0x6A8804   size = 0x15C      itemSize = 0x4    dataOffset = 0x147A98
 	]]
 
+    ----0x5C
+
     local scrollTxtRefs = {
         [3] = {0x458EDD, 0x459010},
         [4] = {0x468097},
@@ -535,12 +562,10 @@ do
     local spcItemsTxtRefs = {
         [2] = {0x42574E, 0x425A07},
         [3] = {0x41CB6E, 0x42576C, 0x4257C6, 0x42580C, 0x425A25, 0x425A7F, 0x425AC5, 0x448640, 0x448754},
-        high = {
-            [6] = {0x449ECB, arr = u1}
-        },
         limit = {
             [1] = {0x425734, 0x425786, 0x4259ED, 0x425A3F},
-            [4] = {0x449D7F}
+            [4] = {0x449D7F},
+            -- [6] = {0x449ECB} -- handled manually below
         },
         relative = {
             [2] = {0x449D75, 0x449ED5, 0x448D0F}, 
@@ -653,7 +678,7 @@ do
     -- 0x8 zero bytes
     -- spc items highest index (dword)
     -- 0x20 zero bytes
-
+--do return end
     local NOP = string.char(0x90)
 
     local dataPtrs = 0x56AACC -- data pointers
@@ -740,12 +765,13 @@ do
         local enchantmentDataOffset = otherDataOffset + 3 + 0x10
 
         -- needed: old and new relative data start addresses (to compute relative offset, (newBegin - newRelativeBegin) - (old begin - oldRelativeBegin))
-        -- debug.Message(format("items %d, std %d, spc %d, potion %d", itemCount, stdItemCount, spcItemCount, potionTxtCount), format("size item %d, std %d, spc %d, potion %d, full %d", itemsSize, stdItemsSize, spcItemsSize, potionTxtSize, itemsSize + stdItemsSize + spcItemsSize + potionTxtSize + 0x3A43))
+        --debug.Message(format("items %d, std %d, spc %d, potion %d", itemCount, stdItemCount, spcItemCount, potionTxtCount), format("size item %d, std %d, spc %d, potion %d, full %d", itemsSize, stdItemsSize, spcItemsSize, potionTxtSize, itemsSize + stdItemsSize + spcItemsSize + potionTxtSize + 0x3A43), format("after potion txt: 0x%X", potionTxtOffset + potionTxtSize))
 
         local itemDataBegin = 0x560C10
         
         local oldRelativeMiscDataOrigin = Game.PotionTxt["?ptr"] + Game.PotionTxt.Size - itemDataBegin
         local newRelativeMiscDataOrigin = otherDataOffset - newSpace
+        --debug.Message((newRelativeMiscDataOrigin - oldRelativeMiscDataOrigin):tohex())
 
         local minOldOff, maxOldOff = itemDataBegin, Game.PotionTxt["?ptr"] + Game.PotionTxt.Size + 0x127
         local minNewOff, maxNewOff = newSpace, otherDataOffset + 0x127
@@ -899,6 +925,11 @@ do
         asmpatch(0x4496AC, "mov eax, " .. u4[rndItemsTxtDataPtr], 0x16)
         asmpatch(0x449ADE, "mov eax, " .. u4[stdItemsTxtDataPtr], 0x1B)
         asmpatch(0x449D22, "mov eax, " .. u4[spcItemsTxtDataPtr], 0x1B)
+
+        -- spcbonus limit fix (don't have time to investigate properly)
+        mem.prot(true)
+        u4[0x449ED1] = spcItemCount
+        mem.prot()
 
         -- don't require rnditems.txt to have filled data for all items
         hooks.ref.itemCount = itemCount
@@ -1064,7 +1095,7 @@ function setItemDrawingHooks()
                 elseif what == "y" or what == 2 then
                     return y
                 elseif what == "xy" or what == 3 then
-                    return {x, y}
+                    return {X = x, Y = y, x, y}
                 end
             end,
             __newindex = function (_, what, val)
@@ -1076,7 +1107,7 @@ function setItemDrawingHooks()
                 elseif what == "y" or what == 2 then
                     i2[yoff] = val
                 elseif what == "xy" or what == 3 then
-                    i2[xoff], i2[yoff] = val[1], val[2]
+                    i2[xoff], i2[yoff] = val.X or val.x or val[1], val.Y or val.y or val[2]
                 end
             end
         })
@@ -1302,7 +1333,7 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
         local sums = enchantmentDataOffset + 0x18
         local function getOffset(key)
             local offsets = {["Standard"] = 0, ["Special"] = 6 * 4, ["SpecialPercentage"] = 6 * 4 * 2}
-            local off = sums + (offsets[key] or error(format("Invalid index %q", key), 3))
+            local off = (offsets[key] or error(format("Invalid index %q", key), 3))
             return off
         end
         Items.RndItemsBonusChanceByLevel = setmetatable({}, {
@@ -1310,10 +1341,10 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
                 checkIndex(i, 1, 6, 2)
                 local tab = setmetatable({}, {
                     __index = function(self, key)
-                        return u4[sums + getOffset(key) + i * 4]
+                        return u4[sums + getOffset(key) + (i - 1) * 4]
                     end,
                     __newindex = function(self, key, val)
-                        u4[sums + getOffset(key) + i * 4] = assertnum(val, 2)
+                        u4[sums + getOffset(key) + (i - 1) * 4] = assertnum(val, 2)
                     end
                 })
                 rawset(t, i, tab)
@@ -1676,6 +1707,7 @@ function setMiscItemHooks(itemCount, enchantmentDataOffset)
             end
         end
     end
+    tget(Items, "debug").runTests = runTests
     --callWhenGameInitialized(runTests)
 end
 

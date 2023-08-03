@@ -315,6 +315,14 @@ function table.filterFunc(t, func) -- filter is taken by merge
 	return out
 end
 
+function table.reduce(t, func)
+	local val = t[1]
+	for i = 2, #t do
+		val = func(val, t[i])
+	end
+	return val
+end
+
 function table.slice(tbl, first, last)
 	local n = #tbl
 	local tableFirstIndex = tbl[0] ~= nil and 0 or 1
@@ -386,8 +394,11 @@ function debugTable(tbl, dumpDepth) -- makes table print its contents in stacktr
 	local mt = getmetatable(tbl) or {}
 	if not mt.__tostring then
 		function mt.__tostring(t)
+			local tostr = rawget(getmetatable(t), "__tostring")
 			rawset(getmetatable(t), "__tostring", nil) -- avoid infinite recursion
-			return dump(t, dumpDepth)
+			local ret = dump(t, dumpDepth)
+			rawset(getmetatable(t), "__tostring", tostr)
+			return ret
 		end
 	end
 	setmetatable(tbl, mt)
@@ -606,3 +617,7 @@ function math.clamp(num, low, high)
 	return max(min(num, high), low)
 end
 getmetatable(1).__index.clamp = math.clamp
+
+function arrayEndPtr(arr)
+	return (arr["?ptr"] + arr.Limit * arr.ItemSize):tohex()
+end
