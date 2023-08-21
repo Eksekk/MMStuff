@@ -7,10 +7,10 @@
 			"path": "../MMExtension"
 		},
 		{
-			"path": "../../../Desktop/MM installs/Might and Magic 6 skill emphasis mod/Scripts"
+			"path": "../../../structOffsets"
 		},
 		{
-			"path": "../../../structOffsets"
+			"path": "../mawNightmare"
 		}
 	],
 	"settings": {}

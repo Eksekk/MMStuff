@@ -41,7 +41,7 @@ function M.loadDll()
             mem.dll.kernel32.FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM, 0, err, 0, buffer, 500, 0);
 			local str = mem.string(buffer)
 			mem.freeMM(buffer)
-			error(string.format("Couldn't load party generator dll! Error %d (message: \"%s\")", err, str))
+			error(string.format("Couldn't load party generator dll! Error %d (message: %q)", err, str))
 			return
 		end
 		d = M.dll

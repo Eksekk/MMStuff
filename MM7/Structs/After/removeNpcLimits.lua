@@ -389,12 +389,13 @@ do
 		local newTextCount = DataTables.ComputeRowCountInPChar(d.eax, 1, 2) - 1
 		local newTopicCount = DataTables.ComputeRowCountInPChar(u4[npcTopicPtr], 1, 2) - 1
 
-		local count = max(newTopicCount, newTextCount)
+		local count = max(newTopicCount, newTextCount, 789) -- mmextension uses hardcoded topic ids up to this number for quests
 		local newSpacePtr = mem.StaticAlloc(count * 8)
 
 		-- NPC TEXT
 
 		processReferencesTable("NPCText", newSpacePtr + 4, newTextCount, npcTextRefs)
+		internal.SetArrayUpval(Game.NPCText, "count", max(newTextCount, 789)) -- override actual number with minimum number
 
 		asmpatch(0x4769B6, "mov [0x73C03C],eax") -- correct file text ptrs
 
@@ -409,6 +410,7 @@ do
 		asmpatch(0x476A83, "mov [0x73C038],eax")
 
 		processReferencesTable("NPCTopic", newSpacePtr, newTopicCount, npcTopicRefs)
+		internal.SetArrayUpval(Game.NPCTopic, "count", max(newTopicCount, 789))
 
 		-- TODO: stuff to do conditional limits removal only if needed
 
