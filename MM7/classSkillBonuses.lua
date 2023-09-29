@@ -48,30 +48,37 @@ local bonuses = {
     },
     [cc.Ranger] = {
         [cs.Armsmaster] = 2,
-        [cs.Axe] = function(pl, level, mastery, skill) -- cana also be a function to always apply variable bonus
+        [cs.Axe] = function(pl, level, mastery, skill) -- can also be a function to always apply variable bonus
             return level:div(2) -- like "of X magic" rings
         end,
     }
 }
 
-function events.GetSkill(t) -- this event is launched each time game requires any player any skill value
+-- this event is launched each time game requires any player any skill value
+-- reference link: https://grayface.github.io/mm/ext/ref/#events.GetSkill
+function events.GetSkill(t)
     local pl = t.Player
     local targetClassId = pl.Class
     local bonus = 0
     local targetSkillId = t.Skill
     local s, m = SplitSkill(t.Result)
     for classId, bonusesEntry in pairs(bonuses) do -- iterate over bonuses table to add those that should be added
+        -- "and" binds stronger than "or"
+        -- "a and b or c and d" is parsed as "(a and b) or (c and d)"
+        -- if you are not sure, you can use parentheses
         if type(classId) == "number" and classId == targetClassId or type(classId) == "table" and table.find(classId, targetClassId) then
-            -- correct class
-            for skillId, skillEntry in pairs(bonusesEntry) do
+            -- correct class from now on
+            for skillId, skillEntry in pairs(bonusesEntry) do -- iterate over skill bonuses for certain class[es]
                 if type(skillId) == "number" and skillId == targetSkillId or type(skillId) == "table" and table.find(skillId, targetSkillId) then
-                    -- correct skill
+                    -- correct skill from now on
                     if type(skillEntry) == "number" then
                         bonus = bonus + skillEntry
                     elseif type(skillEntry) == "function" then
                         bonus = bonus + skillEntry(pl, s, m, targetSkillId)
                     elseif not skillEntry.Condition or skillEntry.Condition(pl, s, m, targetSkillId) then -- check condition
                         bonus = bonus + (skillEntry.CalcBonusFunc and skillEntry.CalcBonusFunc(pl, s, m, targetSkillId) or skillEntry.Bonus or 0) -- add bonus
+                        -- "a and b or c" means that if "a" is true (anything other than nil or false), expression will return "b", otherwise it will return "c"
+                        -- warning: if "b" is nil or false, this will always return "c"!
                     end
                 end
             end

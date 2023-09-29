@@ -1,3 +1,5 @@
+local format = string.format
+
 function universalEnum(t, array, unlimitedElementAmount)
 	local meta = type(t) == "table" and getmetatable(t)
 	local c = {}
@@ -378,11 +380,19 @@ function getUpvalueByValue(f, val)
 	end
 end
 
+function setUpvalue(f, name, val)
+	local i, oldVal = debug.findupvalue(f, name)
+	assert(i, format("Provided function has no upvalue named %q", name))
+	debug.setupvalue(f, i, val)
+	return oldVal
+end
+
 dumpUpvalues = upvalueDump
 getU = getUpvalue
 getUbyV = getUpvalueByValue
 dumpU = dumpUpvalues
 MT = debug.getmetatable or getmetatable
+setU = setUpvalue
 
 function printSortedConst(c)
 	for v, k in sortpairs(table.invert(c)) do

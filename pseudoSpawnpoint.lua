@@ -250,7 +250,7 @@ function sharedSpawnpoint.new(mapname, spawnpointId, monster, max, settings)
 		table.remove(sharedSpawnpoints, oldIndex)
 	end
 
-	local MAX_SPAWNED_AT_ONCE = diffsel(4, 6, 8)
+	local MAX_SPAWNED_AT_ONCE = diffsel and diffsel(4, 6, 8) or 6
 	local ret = {}
 	local spawnpoints = {}
 	local maxSpawnByClass = {}

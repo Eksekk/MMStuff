@@ -11,7 +11,7 @@
 			"path": "../MMExtension/Scripts"
 		},
 		{
-			"path": "MM7"
+			"path": "."
 		}
 	],
 	"settings": {}

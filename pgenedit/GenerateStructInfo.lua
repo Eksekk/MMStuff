@@ -1,7 +1,8 @@
 function reload()
-	dofile("Scripts/Global/GenerateStructInfo.lua")
+	dofile(debug.getinfo(1, "S").source:sub(2))
 end
 r = reload
+local format = string.format
 local mmver = offsets.MMVersion
 local function mm78(...)
 	local r = select(mmver - 6, ...)
@@ -9,6 +10,7 @@ local function mm78(...)
 	return r
 end
 local _DEBUG = true
+local CODE_INJECT_PATH = path.addslash("C:/Users/Eksekk/Documents/GitHub/MMStuff/pgenedit/structsCodeInjection"):gsub("/", "\\")
 --[[
 	> dump(structs, 1)
 	-- interesting stuff:
@@ -128,10 +130,36 @@ function getStructureMembersInfoData(structName)
 	return output, methods
 end
 
+-- those that contain size override at the end (like "define.size = 4")
+local structsWithFakeSize = {"SkillMasteryDescriptions"}
+local function calcStructLargestSize(name)
+	-- member(...) is called for every member, as its name suggests
+	local oldMember, oldCustomType, oldStructsCustomType = getU(types.i8, "member"), types.CustomType, mem.structs.CustomType
+	local max = 0
+	local currentDefine -- to not call getU each time in myMember()
+	local function myMember(...)
+		local ret = {oldMember(...)}
+		--debug.Message(dump(currentDefine, 1))
+		max = math.max(max, currentDefine.offset) -- after member, so array sizes get counted
+		return unpack(ret)
+	end
+	setU(types.i8, "member", myMember)
+	types.CustomType, mem.structs.CustomType = myMember, myMember
+	mem.struct(function(define, ...)
+		currentDefine = define
+		return structs.f[name](define, ...)
+	end)
+	setU(types.i8, "member", oldMember)
+	types.CustomType, mem.structs.CustomType = oldCustomType, oldStructsCustomType
+	--debug.Message(name, max)
+	return max
+end
+
 local globalExcludes =
 {
 	Player = {"Attrs"}, -- attrs is from merge.
-	GameStructure = {"Dialogs"}, -- mmext
+	GameStructure = {"Dialogs", -- mmext
+		"ExtraStatDescriptions", "SkillMasteryDescriptions"}, -- mine
 	Item = {"ExtraData"}, -- my stuff for MAW mod
 }
 
@@ -184,17 +212,23 @@ local convertToPointers = -- because updated during runtime etc.
 {
 	SpritesLod = {"SpritesSW"},
 	GameStructure = {"NPCDataTxt", "MonstersTxt", "CharacterPortraits", "TransportLocations", "NPCGroup", "NPCText", "TransTxt", "ShopTheftExpireTime",
-		"MapDoorSound", "GlobalEvtLines", "ItemsTxt", "NPC", "MixPotions", "ReagentSettings", "NPCNews", "MapFogChances",
+		"MapDoorSound", "GlobalEvtLines", "ItemsTxt", "SpcItemsTxt", "StdItemsTxt", "NPC", "MixPotions", "ReagentSettings", "NPCNews", "MapFogChances",
 		"ShopItems", "GuildItems", "NPCTopic", "ShopSpecialItems", "AutonoteTxt", "MapStats", "Houses", "ClassNames", "HostileTxt",
 		"PlaceMonTxt", "AutonoteCategory", "QuestsTxt", "HousesExtra", "CharacterDollTypes", "HouseMovies", "NPCGreet", "TransportIndex",
-		"GuildNextRefill2", "ShopNextRefill", "ClassNames" -- from merge
-		, "PatchOptions" -- potentially relocated each run
-		, "CustomLods", "MonsterKinds", "TitleTrackOffset", "MissileSetup", "AwardsSort" -- MMExt
+		"GuildNextRefill2", "ShopNextRefill", "ClassNames", "AwardsTxt", "InOODialog", -- from merge
+		"PatchOptions", -- potentially relocated each run (dll loading at different address)
+		"CustomLods", "MonsterKinds", "TitleTrackOffset", "MissileSetup", "AwardsSort", "FoodGoldVisible",-- MMExt
+		"FrameCounter", "NPCNames"
 	},
 	GameClasses = {"HPBase", "SPBase", "HPFactor", "SPFactor", "StartingStats", "Skills" -- Merge
 	, "SPStats"}, -- MMExt
 	GameClassKinds = {"StartingSkills"}, -- Merge
-	DialogLogic = {"List"} -- MMExt
+	DialogLogic = {"List"}, -- MMExt
+	GameParty = {"QBits"}, -- doesn't have changed structs.o.GameParty.QBits entry
+	-- Merge structs
+	CharacterVoices = {"Avail", "Sounds"},
+	ArmorPicsCoords = {"Armors", "Belts", "Boots", "Cloaks", "Helms"},
+	HouseRules = {"AlchemistsSpecial", "AlchemistsStandart", "Arcomage", "ArcomageTexts", "ArmorShopsSpecial", "ArmorShopsStandart", "MagicShopsSpecial", "MagicShopsStandart", "SpellbookShops", "Training", "WeaponShopsSpecial", "WeaponShopsStandart"},
 }
 
 -- decided to keep all three games' structures in one file, because I would have to include files for all games anyway
@@ -220,7 +254,9 @@ local structureByFile =
 	
 	TxtFileItems = {"HistoryTxtItem", "StdItemsTxtItem", "SpcItemsTxtItem", "SpellsTxtItem", "MapStatsItem", "ItemsTxtItem", "NPCProfTxtItem", "Events2DItem", },
 
-	GameDataStructs = {"GameRaces", "GameClasses", "GameClassKinds", "DialogLogic", "Dlg", "GameScreen"},
+	GameDataStructs = {"GameRaces", "GameClasses", "GameClassKinds", "DialogLogic", "Dlg", "GameScreen",
+	"SkillMasteryDescriptions" -- my addition
+},
 
 	GameMisc = {"SpellInfo", "TravelInfo", "FogChances", "ShopItemKind", "GeneralStoreItemKind", "HouseMovie", "Weather", "MoveToMap", "MissileSetup", "TownPortalTownInfo", "EventLine", "ProgressBar", "ActionItem", "PatchOptions", "GameMouse", "MouseStruct", "Fnt"},
 
@@ -247,8 +283,178 @@ local function getStructFile(name)
 	return "unknown"
 end
 
+local function noInfinity(amount) -- structs.Fnt
+	if math.abs(amount) ~= 1/0 then
+		return amount
+	end
+	return 256
+end
+
 -- helper functions
 -- DEFINED IN A_EksekkFunctions.lua
+
+local function getCodeInjectionForStruct(name)
+	os.mkdir(CODE_INJECT_PATH)
+	local file = io.open(CODE_INJECT_PATH .. name .. ".cpp")
+	if file then
+		local code = file:read("*a")
+		file:close()
+		return code
+	end
+end
+
+local function toCamelCase(str)
+	local twoUpper = str:len() >= 2 and str:sub(1, 2):upper() == str:sub(1, 2)
+	str = twoUpper and str or (str:sub(1, 1):lower() .. (str:len() >= 2 and str:sub(2) or ""))
+	str = globalReplacements[str] or str
+	return str
+end
+
+local function processCodeInjection(injection, gameVer)
+	gameVer = gameVer or offsets.MMVersion
+	local lines = injection:gsub("\r\n", "\n"):split("\n") -- gsub just in case
+	local removeRows = {}
+	local mmverRestrictions = {}
+	for i, line in ipairs(lines) do
+		local matchVer = line:match("^#mmver%s-(%d+)")
+		local matchEndVer = line:match("^#endmmver")
+		if matchVer then
+			local vers = {}
+			for c in matchVer:gmatch("%d") do
+				local j = #vers
+				table.insert(vers, tonumber(c))
+				assert(#vers > j, format("Added nil index %d", i))
+			end
+			table.insert(mmverRestrictions, vers)
+			removeRows[i] = true
+		elseif matchEndVer then
+			assert(#mmverRestrictions > 0, format("Too many %q lines", "#endmmver"))
+			table.remove(mmverRestrictions, #mmverRestrictions)
+			removeRows[i] = true
+		else
+			for index = 1, #mmverRestrictions do
+				local vers = mmverRestrictions[index]
+				if not table.find(vers, gameVer) then
+					removeRows[i] = true
+					break
+				end
+			end
+		end
+	end
+	if #mmverRestrictions > 0 then
+		error(format("Not enough %q lines", "#endmmver"))
+	end
+	local processedLines = {}
+	for i, line in ipairs(lines) do
+		if not removeRows[i] then
+			table.insert(processedLines, line)
+		end
+	end
+	return processedLines
+end
+
+local function codeInjectionTests(gameVer)
+	gameVer = gameVer or offsets.MMVersion
+	local testPath = path.addslash(CODE_INJECT_PATH) .. "/tests/"
+	local index = 0
+	local failedAny
+	local attempted = 0
+	while true do
+		index = index + 1
+		local ok, test, output
+		ok, test = pcall(io.load, testPath .. index .. ".cpp")
+		if not ok then break end
+		ok, output = pcall(io.load, testPath .. index .. ".output" .. gameVer)
+		if not ok then break end
+		attempted = attempted + 1
+		local try = processCodeInjection(test, gameVer)
+		io.save(testPath .. index .. ".try", table.concat(try, "\r\n"))
+		output = output:gsub("\r\n", "\n"):split("\n")
+		local fail
+		if #output == 1 and output[1] == "" then -- handle edge case of no output
+			output[1] = nil
+		end
+		if #output ~= #try then
+			fail = true
+		else
+			for i, line in ipairs(output) do
+				if line ~= try[i] then
+					fail = true
+					break
+				end
+			end
+		end
+		if fail then
+			failedAny = true
+			printf("[MM%d] Code injection processing test #%d failed", gameVer, index)
+		end
+	end
+	if not failedAny then
+		printf("[MM%d] All code injection tests passed", gameVer)
+	end
+end
+
+function doTests()
+	codeInjectionTests(6)
+	codeInjectionTests(7)
+	codeInjectionTests(8)
+end
+
+local function generateFunctionCode(functionData, methods, structName, namespaceStr)
+	local functionDeclCode = {}
+	local functionDefCode = {}
+	local funcFormatDecl = "%s %s %s(%s);%s" -- [return type] [calling convention] [name]([params])[comment]
+	local funcFormatDef = "%s %s%s::%s(%s)" -- [return type] [namespaceStr][structName]::[name]([params])
+	for mname, data in pairs(functionData) do
+		local def, info = data.def, data.info
+		local r, retStr = def.ret, "int"
+		if r then
+			local typ = type(r)
+			if typ == "string" then
+				retStr = "char*"
+			elseif typ == "boolean" then
+				retStr = "bool"
+			elseif typ == "number" then
+				retStr = "int"
+			else
+				error(typ)
+			end
+		end
+		local comment = format(" // address: 0x%X", def.p)
+		if def[1] then -- has default parameters or has parameters at all
+			local t = {}
+			local start = 1
+			if methods[mname] then
+				start = 2 -- methods auto-prepend one dummy parameter
+				t[1] = "(this)"
+			end
+			local function tostring2(str) -- quotes string instead of "nil"
+				if type(str) == "string" then
+					return format("%q", str)
+				end
+				return tostring(str)
+			end
+			for i = start, #def do
+				t[#t + 1] = tostring2(def[i])
+			end
+			comment = comment .. " | defaults: " .. table.concat(t, ", ")
+		end
+		local retVal = ({["char*"] = "nullptr", bool = "false", int = "0"})[retStr]
+		local fbody = INDENT_CHARS .. (retVal and format("return %s;", retVal) or "")
+		local ccStr = select(def.cc + 1, "__stdcall", "__thiscall", "__fastcall", "__fastcall/*+eax*/")
+		local paramsStr = info and info.Sig and format("/*%s*/", info.Sig) or ""
+		local fname = toCamelCase(mname) -- using "mname" here also takes care of duplicated functions within class still having distinct names
+		table.insert(functionDeclCode, format(funcFormatDecl, retStr, ccStr, fname, paramsStr, comment))
+		multipleInsert(functionDefCode, #functionDefCode + 1, {
+			format(funcFormatDef, retStr, namespaceStr, structName, fname, paramsStr),
+			"{",
+			fbody,
+			"}",
+			""
+		})
+	end
+	return functionDeclCode, functionDefCode
+end
 
 --[[
 all possible attributes:
@@ -276,8 +482,7 @@ all possible attributes:
 - [added in processStruct] ptrValue - pointer with set value
 - [added in getGroup] padStart
 ]]
-local getMemberData
-function getMemberData(structName, memberName, member, offsets, members, class, rofields, customFieldSizes, inArray)
+local function getMemberData(structName, memberName, member, offsets, members, class, rofields, customFieldSizes, inArray)
 	rofields = rofields or {}
 	member = member or members[memberName]
 	local data = {name = memberName or "", offset = offsets[memberName or ""] or 0}
@@ -327,7 +532,7 @@ function getMemberData(structName, memberName, member, offsets, members, class, 
 		data.lenP = up.lenP
 		data.lenA = data.lenP and getU(MT(up.lenA).__index, "size")
 		data.beyondLen = up.beyondLen
-		data.count = up.count == 0xFFFFFFFF and 0 or up.count
+		data.count = noInfinity(up.count == 0xFFFFFFFF and 0 or up.count)
 		if data.beyondLen then
 			addComment("AccessBeyondLength is active (???)")
 		end
@@ -335,9 +540,11 @@ function getMemberData(structName, memberName, member, offsets, members, class, 
 		if data.low and data.low > 0 then
 			addComment(string.format("MMExt: %d..%d, here %d..%d", data.low, data.low + data.count - 1, 0, data.count - 1))
 		end
-		data.size = ((data.ptr or data.count == 0) and 4 or data.count * up.size)
+		data.size = ((data.ptr or data.count == 0) and 4 or data.count * (up.size + (data.innerType.fakeSize or 0) ))
 		-- PADDING PROBLEMS, two solutions below:
-		if data.innerType.size and up.size > data.innerType.size then
+		if data.innerType.fakeSize then
+			data.innerType.padding = data.innerType.fakeSize
+		elseif data.innerType.size and up.size > data.innerType.size then
 			data.innerType.padding = up.size - data.innerType.size
 			-- 1st, count padding as type size
 			--data.innerType.size = up.size
@@ -455,7 +662,14 @@ function getMemberData(structName, memberName, member, offsets, members, class, 
 		data.typeName = sname
 		data.ptr = isPtr
 		data.struct = true
-		data.size = isPtr and 4 or structs[sname]["?size"]
+		-- if table.find(structsWithFakeSize, sname) then
+		-- 	--data.size = calcStructLargestSize(sname)
+		-- 	data.size = structs[sname]["?size"]
+		-- 	data.padding = data.size
+		-- 	data.fakeSize = data.size
+		-- else
+			data.size = isPtr and 4 or structs[sname]["?size"]
+		--end
 		data.dataType = isPtr and types.pstruct or types.struct
 	else
 		data.array = true
@@ -477,27 +691,42 @@ function getMemberData(structName, memberName, member, offsets, members, class, 
 	end
 	return data
 end
-
-function getArrayPointerString(arrays, last, addPointer) -- for testing: https://cdecl.org/
+--r();print(getArrayPointerString({{count = 5, ptr = true, innerType = {count = 3}}}, {typeName = "int", name = "testMember", ptr = true}))
+do
 	local stdArray = "std::array<%s, %d>"
-	local type = (last.namespacePrefix or "") .. last.typeName .. (last.ptr and "*" or "") .. (last.constPtr and "const" or "")
-	for i = #arrays, 1, -1 do
-		local arr = arrays[i]
-		if arr.count == 0 then
-			type = type .. "*"
+	local primitiveArrayNormal = "(%s)[%d]"
+	local primitiveArrayOfPointers = "(*%s)[%d]"
+	local primitiveArrayOfPointersNoSize = "(*%s)"
+
+	function getArrayPointerString(arrays, last, addPointer, usePrimitiveArrays) -- for testing: https://cdecl.org/
+		if usePrimitiveArrays then
+			local type = last.name
+			for i = 1, #arrays do
+				local arr = arrays[i]
+				if arr.count == 0 then
+					type = primitiveArrayOfPointersNoSize:format(type)
+				else
+					if arr.ptr then
+						type = primitiveArrayOfPointers:format(type, arr.count)
+					else
+						type = primitiveArrayNormal:format(type, arr.count)
+					end
+				end
+			end
+			return (last.namespacePrefix or "") .. last.typeName .. (last.ptr and "*" or "") .. (last.constPtr and "const" or "") .. (addPointer and "*" or "") .. type
 		else
-			type = stdArray:format(type, arr.count) .. (arr.ptr and "*" or "")
-			-- std::array<std::array<uint8_t, 128>*, 128> heightMap;
+			local type = (last.namespacePrefix or "") .. last.typeName .. (last.ptr and "*" or "") .. (last.constPtr and "const" or "")
+			for i = #arrays, 1, -1 do
+				local arr = arrays[i]
+				if arr.count == 0 then
+					type = type .. "*"
+				else
+					type = stdArray:format(type, arr.count) .. (arr.ptr and "*" or "")
+				end
+			end
+			return type .. (addPointer and "*" or "") .. " " .. last.name
 		end
 	end
-	return type .. (addPointer and "*" or "") .. " " .. last.name
-end
-
-local function toCamelCase(str)
-	local twoUpper = str:len() >= 2 and str:sub(1, 2):upper() == str:sub(1, 2)
-	str = twoUpper and str or (str:sub(1, 1):lower() .. (str:len() >= 2 and str:sub(2) or ""))
-	str = globalReplacements[str] or str
-	return str
 end
 
 local function getArraysCommentsAndBaseData(data)
@@ -525,7 +754,7 @@ local function paddingField(value)
 	return {type = "padding", value = value}
 end
 
-local function processSingle(data, indentLevel, structName, namespaceStr, debugLines, layout)
+local function processSingle(data, indentLevel, structName, namespaceStr, debugLines, layout, infoData)
 	indentLevel = indentLevel or 0
 	local indentOuter, indentInner = string.rep(INDENT_CHARS, indentLevel), string.rep(INDENT_CHARS, indentLevel + 1)
 	local dataCopy = data
@@ -538,6 +767,17 @@ local function processSingle(data, indentLevel, structName, namespaceStr, debugL
 	table.foreach(arrays or {}, function(v) v.pascalCaseName = v.name end)
 	data.name = toCamelCase(tostring(data.name))
 
+	local multilineComment -- if two lines or more, put comment before field
+	local function processMultiline(index, indent)
+		if multilineComment then
+			multilineComment[1] = "MMExt info: " .. multilineComment[1]
+			for i, line in ipairs(multilineComment) do
+				multilineComment[i] = indent .. "// " .. line
+			end
+			multipleInsert(s, index, multilineComment)
+			return true
+		end
+	end
 	local function doBaseType(doArrays)
 		local result = data.static and "static " or ""
 		-- structure, mem array, edit pchars, bools, bits
@@ -557,6 +797,16 @@ local function processSingle(data, indentLevel, structName, namespaceStr, debugL
 		table.insert(comments, string.format("0x%X (%d decimal)", offset, offset))
 		if data.bit and data.bitIndex then
 			comments[#comments] = comments[#comments] .. ", bit index " .. data.bitIndex
+		end
+		local info = (infoData or {})[data.pascalCaseName] -- unions don't have info data
+		if info and type(info) == "string" then
+			local parts = info:gsub("\r\n", "\n"):split("\n")
+			if #parts == 1 then
+				local comment = " | MMExt info: " .. parts[1]
+				comments[#comments] = comments[#comments] .. comment
+			else
+				multilineComment = parts
+			end
 		end
 		if data.commentOut then
 			result = "// " .. result
@@ -583,7 +833,7 @@ local function processSingle(data, indentLevel, structName, namespaceStr, debugL
 		}
 		layoutAdd = {
 			{type = "struct", value = {
-				{type = "member", value = data},
+				memberField(data),
 				{type = "padding", value = data.padding}
 			}
 		}}
@@ -591,8 +841,9 @@ local function processSingle(data, indentLevel, structName, namespaceStr, debugL
 		local old2, old3 = data.typeName, data.ptr -- hacky hacky
 		data.typeName = structName
 		data.ptr = nil
+		processMultiline(5, indentOuter)
 		s[#s + 1] = indentOuter .. doBaseType(true) .. ";"
-		table.insert(layoutAdd, {type = "member", value = arrays and arrays[1] or data})
+		table.insert(layoutAdd, memberField(arrays and arrays[1] or data))
 		data.typeName, data.ptr = old2, old3
 	else
 		if data.padStart then
@@ -603,20 +854,22 @@ local function processSingle(data, indentLevel, structName, namespaceStr, debugL
 				indentInner .. 		doBaseType(true) .. ";",
 				indentOuter .. "};"
 			}
+			processMultiline(4, indentInner)
 			layoutAdd = {
 				{type = "struct", value = {
 					{type = "padding", value = data.padStart},
-					{type = "member", value = arrays and arrays[1] or data}
+					memberField(arrays and arrays[1] or data)
 				}
 			}}
 		else
-			s = s .. doBaseType(true)
-			layoutAdd = {{type = "member", value = arrays and arrays[1] or data}}
+			s = {s .. doBaseType(true)}
+			processMultiline(1, indentOuter)
+			layoutAdd = {memberField(arrays and arrays[1] or data)}
 		end
 	end
 	local commentsStr = #comments > 0 and (" // " .. table.concat(comments, " | ")) or ""
 	if type(s) == "table" then
-		s[#s] = s[#s] .. commentsStr
+		s[#s] = s[#s] .. ";" .. commentsStr
 	else
 		s = s .. ";" .. commentsStr
 	end
@@ -655,16 +908,15 @@ end
 
 -- using visual studio code with "lua booster" extension
 -- need to dummy forward declare to not miss recursive call when using "find references"
-local processGroup
-function processGroup(group, indentLevel, structName, namespaceStr, debugLines, layout)
+local function processGroup(group, indentLevel, structName, namespaceStr, debugLines, layout, infoData)
 	indentLevel = indentLevel or 0
 	if #group == 1 then
-		local ret = processSingle(group[1], indentLevel, structName, namespaceStr, debugLines, layout)
+		local ret = processSingle(group[1], indentLevel, structName, namespaceStr, debugLines, layout, infoData)
 		return type(ret) == "table" and ret or {ret}
 	end
 	local indentOuter, indentInner = string.rep(INDENT_CHARS, indentLevel), string.rep(INDENT_CHARS, indentLevel + 1)
 	-- do union wrap
-	local union = {type = "union", value = {}}
+	local union = unionField{}
 	table.insert(layout, union)
 	layout = union.value -- everything else goes into union
 	local code = {
@@ -704,7 +956,7 @@ function processGroup(group, indentLevel, structName, namespaceStr, debugLines, 
 				layoutTmp = stru.value -- next call will pack members into this struct
 				table.insert(layout, stru)
 			end
-			code[#code + 1] = processSingle(member, indentLevel + 1, structName, namespaceStr, debugLines, layoutTmp)
+			code[#code + 1] = processSingle(member, indentLevel + 1, structName, namespaceStr, debugLines, layoutTmp, infoData)
 			if padding and not skipFirst then
 				indentLevel = indentLevel - 1
 				code[#code + 1] = indentInner .. "};"
@@ -776,9 +1028,9 @@ function processGroup(group, indentLevel, structName, namespaceStr, debugLines, 
 				doBits()
 			end
 			if #members == 1 then
-				code[#code + 1] = processSingle(currentField, indentLevel + 2, structName, namespaceStr, debugLines, layout)
+				code[#code + 1] = processSingle(currentField, indentLevel + 2, structName, namespaceStr, debugLines, layout, infoData)
 			else
-				code[#code + 1] = processGroup(members, indentLevel + 2, structName, namespaceStr, debugLines, layout) -- nested unions
+				code[#code + 1] = processGroup(members, indentLevel + 2, structName, namespaceStr, debugLines, layout, infoData) -- nested unions
 			end
 			lastOffset = currentField.offset + currentField.size
 			if i > #wrap then break end
@@ -870,15 +1122,14 @@ function returns table with definition lines, array of names of structures it de
 ]]
 local checkInvalidProcessedStructIndex
 do
-	local expected = {"code", "dependencies", "size", "processedStructs", "staticDefinitionCode", "fields", "groups", "memberInfoData", "functionData", "methods"}
+	local expected = {"code", "dependencies", "size", "processedStructs", "staticDefinitionCode", "fields", "groups", "memberInfoData", "functionData", "methods", "functionDefCode"}
 	function checkInvalidProcessedStructIndex(tbl, key)
 		if table.find(expected, key) then return end
 		error(string.format("Unexpected struct table index %q", key), 2)
 	end
 end
 
-local processStruct
-function processStruct(args)
+local function processStruct(args)
 	-- initialization
 
 	-- default arguments
@@ -896,7 +1147,7 @@ function processStruct(args)
 	local staticPtrDeclarationCode, staticConvertToPointerDeclarationCode, staticDefinitionCode = {}, {}, {}
 	local offsets, members = args.offsets or structs.o[args.name], args.members or structs.m[args.name]
 	local class, rofields = args.class or structs[args.name], args.rofields or {}
-	local size = not args.union and class["?size"] or 0
+	local size = noInfinity(not args.union and class["?size"] or 0)
 	
 	-- after initialization
 	-- forward declaration only if structure has 0 size or no members (yes, those exists)
@@ -910,23 +1161,28 @@ function processStruct(args)
 			size = 0,
 			processedStructs = args.processedStructs,
 			fields = {},
-			functionData = {},
+			functionData = {}, functionDefCode = {},
 			methods = {}, class = {}, layout = {}
 		}
 		args.processedStructs[args.name] = data
 		table.insert(tget(args, "structOrder"), 1, args.name)
-		return setmetatable(data, {__index = invalidIndex})
+		return setmetatable(data, {__index = checkInvalidProcessedStructIndex})
 	end
 
 	addExtraFields(args.name, fields)
 
+	local functionDeclCode, functionDefCode = {}, {}
 	-- get Info{} data
+	-- TODO: append this as comments to fields
 	local infoData, methods
 	if not args.union then
 		infoData, methods = getStructureMembersInfoData(args.name)
 	end
-	-- get function data
+	-- generate function code
 	local functionData = not args.union and getFunctionsData(class, infoData)
+	if not args.union then
+		functionDeclCode, functionDefCode = generateFunctionCode(functionData, methods, args.name, myNamespaceStr)
+	end
 
 	-- process members
 	for mname, f in sortpairs(members) do
@@ -944,6 +1200,9 @@ function processStruct(args)
 			end
 		end
 		if data then -- in certain cases member data is unknown or otherwise unavailable to gather
+			if data.offset and data.offset > 0x1000000 and (not getBaseTypeField(data, "convertToPointer") and not data.convertToPointer) then -- convertToPointer can be defined in outer type too
+				printf("member '%s.%s' has offset 0x%X - probably dynamically relocated", args.name, data.name, data.offset)
+			end
 			addNamespacePrefixes(data, myNamespaceStr)
 			if args.union and tonumber(data.name) then
 				-- array with some fields rearranged, so it can't be indexed with const.* in all cases
@@ -965,7 +1224,7 @@ function processStruct(args)
 				goto continue
 			elseif (data.array and data.innerType.convertToPointer) or data.convertToPointer then
 				findDependencies(data, structureDependencies)
-				if not args.saveToGeneratorDirectory then -- keep normal field only if reverse engineering?
+				if not args.intendedForPgenedit then -- keep normal field only if reverse engineering?
 					local f = deepcopyMM(data)
 					table.insert(fields, f)
 				end
@@ -988,11 +1247,15 @@ function processStruct(args)
 					)
 				)
 				local old2 = baseData.namespacePrefix
-				baseData.namespacePrefix = myNamespaceStr .. args.name .. "::"
+				local add = myNamespaceStr .. args.name .. "::"
+				if baseData.struct then -- struct uses namespace-qualified type name, other types don't
+					baseData.namespacePrefix = myNamespaceStr
+				end
+				baseData.name = add .. baseData.name
 				resultTypeAndName = getArrayPointerString(arraysNestedOnly, baseData, true)
 				table.insert(staticDefinitionCode, string.format("%s = nullptr;", resultTypeAndName))
 				if arrays[1] then
-					if not args.saveToGeneratorDirectory then -- if for reverse engineering, add default size field
+					if not args.intendedForPgenedit then -- if for reverse engineering, add default size field
 						addArraySizeField()
 					end
 					local isPointer = arrays[1].lenA and true or false
@@ -1029,7 +1292,8 @@ function processStruct(args)
 			elseif data.union then
 				local res = processStruct{name = data.name:sub(1, 1):lower() .. data.name:sub(2), offsets = data.offsets, members = data.fields, rofields = data.rofields,
 					union = true, indentLevel = 0, prependNamespace = args.prependNamespace, offset = data.offset, processedStructs = args.processedStructs, parent = args.name,
-					processDependencies = args.processDependencies, structOrder = args.structOrder, shouldProcessDependency = args.shouldProcessDependency, layout = {}}
+					processDependencies = args.processDependencies, structOrder = args.structOrder,
+					shouldProcessDependency = args.shouldProcessDependency, layout = {}, functionDefCode = functionDefCode,}
 				data.code, data.size, data.layout = res.code, res.size, res.layout
 					-- unions have 0 indent level and this breaks normal structs processed as dependencies
 					-- this whole indent system should be probably redone anyways
@@ -1062,6 +1326,8 @@ function processStruct(args)
 	end)
 	local code = {}
 	code[#code + 1] = indentOuter .. "{"
+	
+	-- new pointers
 	if #staticPtrDeclarationCode > 0 then
 		table.insert(staticPtrDeclarationCode, "")
 	end
@@ -1070,6 +1336,8 @@ function processStruct(args)
 		table.insert(staticConvertToPointerDeclarationCode, "")
 	end
 	multipleInsert(code, #code + 1, staticConvertToPointerDeclarationCode)
+
+	-- fields
 	local currentOffset = -1
 	local prevOffset = args.offset or 0 -- for skipping bytes
 	local i = 1
@@ -1092,7 +1360,7 @@ function processStruct(args)
 		local firstIndex = i
 		members, i, maxNextOffset = getGroup(fields, currentField, i)
 		groups[#groups + 1] = {members = members, firstIndex = firstIndex, maxNextOffset = maxNextOffset}
-		local group = processGroup(members, args.indentLevel + 1, not args.union and args.name, not args.union and myNamespaceStr or "", debugLines, layout)
+		local group = processGroup(members, args.indentLevel + 1, not args.union and args.name, not args.union and myNamespaceStr or "", debugLines, layout, infoData)
 		multipleInsert(code, #code + 1, group)
 		prevOffset = maxNextOffset
 	end
@@ -1105,6 +1373,24 @@ function processStruct(args)
 			table.insert(layout, {type = "padding", value = endPadding})
 		end
 	end
+
+	for i, sig in ipairs(functionDeclCode) do
+		functionDeclCode[i] = indentInner .. sig
+	end
+	multipleInsert(code, #code + 1, functionDeclCode)
+
+	if not args.union then
+		local injection = getCodeInjectionForStruct(args.name)
+		if injection then
+			local lines = processCodeInjection(injection)
+			for i, line in ipairs(lines) do
+				lines[i] = indentInner .. line
+			end
+			table.insert(lines, 1, "")
+			multipleInsert(code, #code + 1, lines)
+		end
+	end
+
 	code[#code + 1] = args.union and string.format("%s} %s;", indentOuter, args.name) or (indentOuter .. "};")
 	if args.union then
 		table.insert(code, 1, string.format("%sstruct // size: 0x%X, MMExt union", indentOuter, size))
@@ -1139,8 +1425,8 @@ function processStruct(args)
 		if not args.processedStructs[args.name] then -- unions are inline
 			args.processedStructs[args.name] = setmetatable({code = code, dependencies = structureDependencies,
 				size = size, staticDefinitionCode = staticDefinitionCode, groups = groups, fields = fields, memberInfoData = infoData,
-				functionData = functionData, methods = methods, class = class, layout = layout},
-				{__index = invalidIndex}
+				functionData = functionData, methods = methods, class = class, layout = layout, functionDefCode = functionDefCode},
+				{__index = checkInvalidProcessedStructIndex}
 			)
 		end
 		-- structure needs to be after all of its dependencies
@@ -1150,11 +1436,19 @@ function processStruct(args)
 				maxI = i
 			end
 		end
+		-- alphabetically
+		-- for i = 1, maxI - 1 do
+		-- 	if args.structOrder[i]:lower() < args.structOrder[i + 1]:lower() then
+		-- 		maxI = i
+		-- 		break
+		-- 	end
+		-- end
 		table.insert(args.structOrder, math.min(#args.structOrder + 1, maxI + 1), args.name)
 	end
 	return setmetatable(args.processedStructs[args.name] or {code = code, dependencies = structureDependencies, size = size,
 		processedStructs = args.processedStructs, groups = groups, fields = fields, memberInfoData = infoData,
-		functionData = functionData, methods = methods, class = class, layout = layout}, {__index = invalidIndex})
+		functionData = functionData, methods = methods, class = class, layout = layout,
+		functionDefCode = functionDefCode}, {__index = checkInvalidProcessedStructIndex})
 end
 
 local function processAll(args)
@@ -1173,12 +1467,12 @@ local function processAll(args)
 	return processed
 end
 
--- saveToGeneratorDirectory - whether it's for my project (true) or for reverse engineering purposes (false)
+-- intendedForPgenedit - whether it's for my project (true) or for reverse engineering purposes (false)
 -- isLast if it's last of 3 games processed
-function printStruct(name, includeMembers, excludeMembers, indentLevel, saveToGeneratorDirectory, isLast, directoryPrefix) 
+function printStruct(name, includeMembers, excludeMembers, indentLevel, intendedForPgenedit, isLast, directoryPrefix) 
 	luaData = {}
 	indentLevel = indentLevel or 1 -- always 1 indentation level if wrapping
-	local args = {name = name, includeMembers = includeMembers, excludeMembers = excludeMembers, indentLevel = indentLevel, saveToGeneratorDirectory = saveToGeneratorDirectory}
+	local args = {name = name, includeMembers = includeMembers, excludeMembers = excludeMembers, indentLevel = indentLevel, intendedForPgenedit = intendedForPgenedit}
 	local processed = processAll(args)
 	_G.processed, _G.args = processed, args
 	local pathToLoad = "C:\\Users\\Eksekk\\code.bin"
@@ -1188,6 +1482,7 @@ function printStruct(name, includeMembers, excludeMembers, indentLevel, saveToGe
 		ok, oldCode = pcall(internal.unpersist, fileContent)
 	end
 	local code = ok and oldCode or {}
+	local loadedSuccessfully = ok and true or false -- if more than one game, put files inside "combined" folder
 	-- for i, name in ipairs(args.structOrder) do
 	-- 	structureByFile[name] = {name} -- hack to help with doxygen
 	-- end
@@ -1215,6 +1510,10 @@ function printStruct(name, includeMembers, excludeMembers, indentLevel, saveToGe
 			currentCode.source = table.join(currentCode.source, struct.staticDefinitionCode)
 			table.insert(currentCode.source, "")
 		end
+		if struct.functionDefCode and #struct.functionDefCode > 0 then
+			currentCode.source = table.join(currentCode.source, struct.functionDefCode)
+			table.insert(currentCode.source, "")
+		end
 		for i, v in ipairs(struct.dependencies) do
 			local depFileName = getStructFile(v)
 			if not table.find(currentCode.includes, depFileName) and depFileName ~= fileName then
@@ -1230,8 +1529,6 @@ function printStruct(name, includeMembers, excludeMembers, indentLevel, saveToGe
 			end
 		end
 	end
-	--code = table.join(code, processed[name].code)
-	--io.save("structs.h", table.concat(code, "\n"))
 	for i, fileName in ipairs(usedFiles) do
 		local currentCode = code[fileName]
 		multipleInsert(currentCode.header, #currentCode.header + 1, {
@@ -1241,11 +1538,12 @@ function printStruct(name, includeMembers, excludeMembers, indentLevel, saveToGe
 	if not isLast then
 		io.save(pathToLoad, internal.persist(code))
 	else
-		if saveToGeneratorDirectory then
+		local dir = directoryPrefix or "C:\\Users\\Eksekk\\structOffsets"
+		if not directoryPrefix and intendedForPgenedit then
 			os.remove("C:\\Users\\Eksekk\\source\\repos\\PGenEdit\\PGenEditDLL\\headers\\structs")
 			os.remove("C:\\Users\\Eksekk\\source\\repos\\PGenEdit\\PGenEditDLL\\sources\\structs")
 		else
-			for p in path.find("C:\\Users\\Eksekk\\structOffsets\\*") do
+			for p in path.find(path.addslash(dir) .. "*") do
 				if not mem.dll.shlwapi.PathIsDirectoryA(p) then
 					os.remove(p)
 				end
@@ -1263,7 +1561,7 @@ function printStruct(name, includeMembers, excludeMembers, indentLevel, saveToGe
 				"#include \"pch.h\"",
 				"#include \"main.h\"",
 			}
-			if not saveToGeneratorDirectory then -- all header includes are in pch.h
+			if not intendedForPgenedit then -- all header includes are in pch.h
 				multipleInsert(prefix, #prefix + 1, includeCode)
 			end
 			multipleInsert(prefix, #prefix + 1, {
@@ -1277,16 +1575,19 @@ function printStruct(name, includeMembers, excludeMembers, indentLevel, saveToGe
 				"#pragma pack(pop)"
 			})
 			local headerFileName, sourceFileName
-			if saveToGeneratorDirectory then
+			if not directoryPrefix and intendedForPgenedit then
 				headerFileName = string.format("C:\\Users\\Eksekk\\source\\repos\\PGenEdit\\PGenEditDLL\\headers\\structs\\%s.h", fileName)
 				sourceFileName = string.format("C:\\Users\\Eksekk\\source\\repos\\PGenEdit\\PGenEditDLL\\sources\\structs\\%s.cpp", fileName)
+			elseif loadedSuccessfully then
+				headerFileName = string.format("%s\\combined\\%s.h", dir, fileName)
+				sourceFileName = string.format("%s\\combined\\%s.cpp", dir, fileName)
 			else
-				headerFileName = string.format("%s\\MM%d\\%s.h", directoryPrefix or "C:\\Users\\Eksekk\\structOffsets", Game.Version, fileName)
-				sourceFileName = string.format("%s\\MM%d\\%s.cpp", directoryPrefix or "C:\\Users\\Eksekk\\structOffsets", Game.Version, fileName)
+				headerFileName = string.format("%s\\MM%d\\%s.h", dir, Game.Version, fileName)
+				sourceFileName = string.format("%s\\MM%d\\%s.cpp", dir, Game.Version, fileName)
 			end
-			local luaDataFileName = "C:\\Users\\Eksekk\\source\\repos\\PGenEdit\\luaData.cpp"
+			local luaDataFileName = path.addslash(directoryPrefix or "C:\\Users\\Eksekk\\source\\repos\\PGenEdit") .. "luaData.cpp"
 			io.save(headerFileName, table.concat(currentCode.header, "\n"))
-			if #currentCode.source > 0 and saveToGeneratorDirectory then
+			if #currentCode.source > 0 and intendedForPgenedit then
 				local prefix = {
 					"#pragma once",
 					"#include \"pch.h\"",
@@ -1299,7 +1600,7 @@ function printStruct(name, includeMembers, excludeMembers, indentLevel, saveToGe
 			end
 			-- ptrName
 			--tget(luaData, args.name, baseData.name).sizePtrName
-			if saveToGeneratorDirectory then
+			if intendedForPgenedit then
 				local content = {}
 				for sname, fields in pairs(luaData) do
 					for fname, field in pairs(fields) do
@@ -1343,6 +1644,14 @@ end
 
 function pr3(isLast)
 	printStruct("GameStructure", nil, nil, nil, false, isLast)
+end
+
+function generateDefinitionsForPgenedit(isLast)
+	printStruct("GameStructure", nil, nil, nil, true, isLast)
+end
+
+function generateDefinitionsForPgeneditCmp(isLast)
+	printStruct("GameStructure", nil, nil, nil, true, isLast, "C:\\Users\\Eksekk\\structOffsetsPgenedit 2")
 end
 
 -- adding most information from lua to x64dbg database
@@ -1428,13 +1737,6 @@ do
 			return false
 		end
 		error("Unknown type", 2)
-	end
-
-	local function noInfinity(amount) -- structs.Fnt
-		if math.abs(amount) ~= 1/0 then
-			return amount
-		end
-		return 256
 	end
 
 	function processDebuggerDatabase(removeOld) -- remove old for testing
@@ -1582,8 +1884,7 @@ do
 					paddingIndex = paddingIndex + 1
 					return p
 				end
-				local doStructUnion
-				function doStructUnion(struct, name, isUnion)
+				local function doStructUnion(struct, name, isUnion)
 					local json = {
 						name = name or ((isUnion and "U" or "S") .. "_" .. structIndex),
 						members = {}
@@ -1699,7 +2000,10 @@ end
 
 
 -- "ENUM" GENERATOR
-local namePrefixes = {["Stats"] = "STAT", ["Skills"] = "SKILL", ["Damage"] = "DMG"}
+local namePrefixes = {["Stats"] = "STAT", ["Skills"] = "SKILL", ["Damage"] = "DMG", ItemSlot = "ITEM_SLOT", PlayerBuff = "PLAYER_BUFF", PartyBuff = "PARTY_BUFF",
+	MonsterBits = "MON_BIT", MonsterBuff = "MON_BUFF", MonsterBonus = "MON_BONUS", MonsterKind = "MON_KIND", ItemType = "ITEM_TYPE", HouseType = "HOUSE_TYPE",
+	HouseScreens = "HOUSE_SCREENS", FacetBits = "FACET_BIT", FaceAnimation = "PLAYER_FACE_ANIMATION", Condition = "PLAYER_CONDITION", ChestBits = "CHEST_BIT",
+	AIState = "MON_AI_STATE", Spells = "SPELL"}
 local consts, header, source = {}, {}, {}
 function processConst(name)
 	if not consts[6] then
@@ -1725,7 +2029,7 @@ function processConst(name)
 				}
 				setfenv(f, env)
 				f()
-				consts[i] = env.const
+				consts[i] = env.const or {}
 				::continue::
 			end
 		end
@@ -1736,22 +2040,34 @@ function processConst(name)
 	
 	local allKeys = {}
 	for i, const in pairs(consts) do
+		const[name] = const[name] or {}-- const.MonsterKind is not present in MM6
 		for v, k in sortpairs(table.invert(const[name])) do
 			if not table.find(allKeys, k) then
 				allKeys[#allKeys + 1] = k
 			end
 		end
 	end
-	local function formatName(name)
-		name = name:gsub("([a-z])([A-Z0-9])", "%1_%2")
-		name = prefix .. "_" .. name:upper()
+	local function formatName(name, pr)
+		pr = pr or prefix
+		name = name:gsub("([a-z])([A-Z0-9])", "%1_%2"):gsub("'", ""):gsub(" ", "_")
+		name = pr .. "_" .. name:upper()
 		return name
 	end
-	local forwardDecl = {"extern int"}
+	local vectorName = formatName(name, "ALL")
+	local vector = format("std::vector<int64_t> %s", vectorName)
+	local mapName = formatName(name, "ENUM_TO_STRING")
+	local map = format("std::map<int64_t, std::string> %s", mapName)
+	local forwardDecl = {"extern int64_t"}
 	for i, k in ipairs(allKeys) do
 		table.insert(forwardDecl, "\t" .. formatName(k) .. (i == #allKeys and ";" or ","))
 	end
-	table.insert(forwardDecl, "") -- becomes newline after concat
+	multipleInsert(forwardDecl, #forwardDecl + 1, {
+		"",
+		"extern " .. vector .. ";",
+		"extern " .. map .. ";",
+		""
+	})
+	
 	for _, i in ipairs{6, 7, 8} do
 		table.insert(forwardDecl, string.format("extern void makeEnum%s_%d();", name, i))
 	end
@@ -1760,27 +2076,41 @@ function processConst(name)
 	
 	-- source
 	
-	source[#source + 1] = "int "
+	source[#source + 1] = "int64_t "
 	local last = allKeys[#allKeys]
 	for _, k in ipairs(allKeys) do
 		table.insert(source, string.format("\t%s = INVALID_ID%s", formatName(k), k == last and ";" or ","))
 	end
-	table.insert(source, "")
+	multipleInsert(source, #source + 1, {
+		"",
+		vector .. ";",
+		map .. ";",
+		""
+	})
 	
-	for _, i in ipairs{6, 7, 8} do
-		table.insert(source, string.format("void makeEnum%s_%d()", name, i))
+	for _, gameVer in ipairs{6, 7, 8} do
+		table.insert(source, string.format("void makeEnum%s_%d()", name, gameVer))
 		table.insert(source, "{")
-		for v, k in sortpairs(table.invert(consts[i][name])) do
+		local vectorVals = {}
+		local mapVals = {}
+		for v, k in sortpairs(table.invert(consts[gameVer][name])) do
 			table.insert(source, string.format("\t%s = %d;", formatName(k), v))
+			table.insert(vectorVals, formatName(k))
+			mapVals[#mapVals+1] = format("{%s, %q}", formatName(k), k)
 		end
-		
-		table.insert(source, "}")
-		table.insert(source, "")
+		multipleInsert(source, #source + 1, {
+			"",
+			format("\t%s = { %s };", vectorName, table.concat(vectorVals, ", ")),
+			"",
+			format("\t%s = { %s };", mapName, table.concat(mapVals, ", ")),
+			"}",
+			"",
+		})
 	end
 	table.insert(source, "")
 end
 
-local constsToProcess = {"Damage"}
+local constsToProcess = {"Stats"--[[, "Skills"]], "Damage", "ItemType", "ItemSlot", "PlayerBuff", "PartyBuff", "MonsterBits", "MonsterBuff", "MonsterBonus", "MonsterKind", "HouseType", "HouseScreens", "FacetBits", "FaceAnimation", "Condition", "ChestBits", "AIState", "Spells"}
 function writeConsts()
 	for _, const in ipairs(constsToProcess) do
 		processConst(const)

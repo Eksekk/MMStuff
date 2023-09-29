@@ -24,7 +24,6 @@ Quest {
             pl.SP = math.max(pl.SP, pl:GetFullSP()) -- math.max makes it so that mana won't decrease if it's above maximum
         end
     end,
-
     -- example CanShow function. Will be run when you enter NPC dialog, if this function returns false, topic won't be shown at all
     CanShow = function()
         return evt.CheckMonstersKilled{CheckType = 3, Id = 200, Count = 0} -- all monsters of id 200 on current map must be killed to show topic

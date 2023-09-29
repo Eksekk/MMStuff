@@ -50,6 +50,7 @@ function M.loadDll()
 		M.dll.setClassData(json.encode(M.C())) -- SET DATA BEFORE INIT
 		M.dll.setSkillData(json.encode(M.Sk()))
 		M.dll.setMiscData(json.encode(M.getMiscData()))
+		M.dll.setItemData(json.encode(M.getItemData()))
 		M.dll.init()
 		runEventLoopOnce = function() M.dll.runEventLoopOnce() end
 		events.Tick = runEventLoopOnce
@@ -114,6 +115,13 @@ function M.getMiscData()
 	ok, M.miscData = pcall2(require, "PGenEditData\\miscData");
 	package.loaded["PGenEditData\\miscData"] = nil
 	return M.miscData
+end
+
+function M.getItemData()
+	local ok
+	ok, M.itemData = pcall2(require, "PGenEditData\\itemData");
+	package.loaded["PGenEditData\\itemData"] = nil
+	return M.itemData
 end
 
 M.playerTypes = {caster = "caster", melee = "melee", ranged = "ranged", defensive = "defensive", utility = "utility"}

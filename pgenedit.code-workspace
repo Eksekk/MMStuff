@@ -5,17 +5,30 @@
 			"path": "."
 		},
 		{
-			"name": "MMExtension",
-			"path": "../MMExtension"
-		},
-		{
 			"name": "structOffsets",
 			"path": "../../../structOffsets"
 		},
 		{
 			"name": "PGenEditData",
 			"path": "../../../Desktop/MM installs/Might and Magic VII vanilla Grayface patch repo MMExt/Scripts/Modules/PGenEditData"
+		},
+		{
+			"path": "../../../../../wxWidgets-3.2.1"
+		},
+		{
+			"path": "../../../source/repos/PGenEdit"
+		},
+		{
+			"path": "../../../Desktop/MM installs/Might and Magic VIII revamp for rev4 newest/Scripts"
+		},
+		{
+			"path": "../../../Desktop/MM installs/Might and Magic VII vanilla Grayface patch repo MMExt"
+		},
+		{
+			"path": "../../../Desktop/MM installs/Might and Magic 8 ONLINE"
 		}
 	],
-	"settings": {}
+	"settings": {
+		"dotnet.defaultSolution": "PGenEdit/PGenEdit.sln"
+	}
 }
