@@ -1558,7 +1558,7 @@ function printStruct(name, includeMembers, excludeMembers, indentLevel, intended
 			end
 			local prefix = {
 				"#pragma once",
-				"#include \"pch.h\"",
+				-- "#include \"pch.h\"", // commented out, because this shouldn't be in header files, compiler and IDE works properly when it's in source files only
 				"#include \"main.h\"",
 			}
 			if not intendedForPgenedit then -- all header includes are in pch.h
@@ -2110,7 +2110,7 @@ function processConst(name)
 	table.insert(source, "")
 end
 
-local constsToProcess = {"Stats"--[[, "Skills"]], "Damage", "ItemType", "ItemSlot", "PlayerBuff", "PartyBuff", "MonsterBits", "MonsterBuff", "MonsterBonus", "MonsterKind", "HouseType", "HouseScreens", "FacetBits", "FaceAnimation", "Condition", "ChestBits", "AIState", "Spells"}
+local constsToProcess = {"Stats", "Skills", "Damage", "ItemType", "ItemSlot", "PlayerBuff", "PartyBuff", "MonsterBits", "MonsterBuff", "MonsterBonus", "MonsterKind", "HouseType", "HouseScreens", "FacetBits", "FaceAnimation", "Condition", "ChestBits", "AIState", "Spells"}
 function writeConsts()
 	for _, const in ipairs(constsToProcess) do
 		processConst(const)

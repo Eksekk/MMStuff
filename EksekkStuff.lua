@@ -56,6 +56,7 @@ function M.loadDll()
 		events.Tick = runEventLoopOnce
 		--function events.AfterLoadMap() M.dll.runTests() end
 		rawset(M.dll, "runLua", M.dll.runLuaScriptFromDLL)
+		M.reloadApi()
 	end
 end
 
@@ -178,9 +179,8 @@ mmvAssert = function(ver)
 end
 
 function M.reloadApi()
-	dofile "E:\\Documents\\GitHub\\MMStuff\\pgenedit\\PGenEditApi.lua"
+	dofile "C:\\Users\\Eksekk\\Documents\\GitHub\\MMStuff\\pgenedit\\PGenEditApi.lua"
 end
-M.reloadApi()
 
 --[[
 	MAW resurrection tests:

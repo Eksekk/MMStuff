@@ -5,6 +5,8 @@ local format = string.format
 
 if offsets.MMVersion ~= 7 then return end
 
+-- okay, so scripts from modules directory are loaded (loadstring) before scripts from structs run, but aren't executed instantly, only when first require-d
+
 function arrayFieldOffsetName(arr, offset)
 	local i = offset:div(arr.ItemSize)
 	local off = offset % arr.ItemSize

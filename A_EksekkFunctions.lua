@@ -631,3 +631,33 @@ getmetatable(1).__index.clamp = math.clamp
 function arrayEndPtr(arr)
 	return (arr["?ptr"] + arr.Limit * arr.ItemSize):tohex()
 end
+
+function nthNext(tbl, n)
+	local key, val
+	for i = 1, n do
+		key, val = next(tbl, key)
+	end
+	return key, val
+end
+
+function equippedItemIndex(slot)
+	local item = Party[Game.CurrentPlayer]:GetEquippedItem(slot)
+	if item then
+		for i, item2 in Party[Game.CurrentPlayer].Items do
+			if item == item2 then
+				print(i)
+				return
+			end
+		end
+	end
+end
+
+function itemIndexByName(name)
+	for i, item in Party[Game.CurrentPlayer].Items do
+		if item:T().Name:lower():match(name:lower()) then
+			print(i)
+			return
+		end
+	end
+end
+
