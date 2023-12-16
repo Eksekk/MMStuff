@@ -3,21 +3,14 @@ local hook, autohook, autohook2, asmpatch = mem.hook, mem.autohook, mem.autohook
 local max, min, floor, ceil, round, random = math.max, math.min, math.floor, math.ceil, math.round, math.random
 local format = string.format
 
-if offsets.MMVersion ~= 7 then return end
+local E = require"EksekkLimitsRemovalFunctions"
+local mmver, mmv = offsets.MMVersion, E.mmv
+
+if mmver ~= 7 then return end
 
 -- okay, so scripts from modules directory are loaded (loadstring) before scripts from structs run, but aren't executed instantly, only when first require-d
 
-function arrayFieldOffsetName(arr, offset)
-	local i = offset:div(arr.ItemSize)
-	local off = offset % arr.ItemSize
-	for k, v in pairs(structs.o[structs.name(arr[0])]) do
-		if v == off then
-			print(k)
-			return
-		end
-	end
-	print("not found")
-end
+local arrayFieldOffsetName, replacePtrs, processReferencesTable = assert(E.arrayFieldOffsetName), assert(E.replacePtrs), assert(E.processReferencesTable)
 
 local arrs = {"NPCDataTxt", "NPC", "NPCNames", "NPCProfTxt", "StreetNPC", "NPCNews", "NPCGreet", "NPCGroup", "NPCProfNames"}
 local arrPtrs = {}
@@ -36,15 +29,6 @@ function npcArrayFieldOffsetName(offset)
 		end
 	end
 	print("Couldn't find NPC array for given offset")
-end
-
-function replacePtrs(addrTable, newAddr, origin, cmdSize, check)
-	for i, oldAddr in ipairs(addrTable) do
-		local old = u4[oldAddr + cmdSize]
-		local new = newAddr - (origin - old)
-		check(old, new, cmdSize, i)
-		u4[oldAddr + cmdSize] = new
-	end
 end
 
 -- DataTables.ComputeRowCountInPChar(p, minCols, needCol)
@@ -210,53 +194,6 @@ do
 		}
 	}
 
-	local function processReferencesTable(arrName, newAddress, newCount, addressTable)
-		local arr = Game[arrName]
-		local origin = arr["?ptr"]
-		local lowerBoundIncrease = (addressTable.lowerBoundIncrease or 0) * arr.ItemSize
-		addressTable.lowerBoundIncrease = nil -- eliminate special case in loop below
-		local oldMin, oldMax = origin - arr.ItemSize - lowerBoundIncrease, origin + arr.Size + arr.ItemSize
-		local newMin, newMax = newAddress - arr.ItemSize - lowerBoundIncrease, newAddress + arr.ItemSize * (newCount + 1)
-		local function check(old, new, cmdSize, i)
-			assert(old >= oldMin and old <= oldMax, format("[%s] old address 0x%X [cmdSize %d; array index %d] is outside array bounds [0x%X, 0x%X] (new entry count: %d)", arrName, old, cmdSize, i, oldMin, oldMax, newCount))
-			assert(new >= newMin and new <= newMax, format("[%s] new address 0x%X [cmdSize %d; array index %d] is outside array bounds [0x%X, 0x%X] (new entry count: %d)", arrName, new, cmdSize, i, newMin, newMax, newCount))
-		end
-		mem.prot(true)
-		for cmdSize, addresses in pairs(addressTable) do
-			if type(cmdSize) == "number" then
-				-- normal refs
-				replacePtrs(addresses, newAddress, origin, cmdSize, check)
-			else
-				-- special refs
-				local what = cmdSize
-				local memArr = addresses.arr or i4
-				for cmdSize, addresses in pairs(addresses) do
-					for i, data in ipairs(addresses) do
-						-- support per-address mem array types
-						local memArr, addr = memArr -- intentionally override local
-						if type(data) == "table" then
-							memArr = data.arr or memArr
-							addr = data[1]
-						else
-							addr = data
-						end
-						if what == "limit" then
-							memArr[addr + cmdSize] = memArr[addr + cmdSize] - arr.Limit + newCount
-						elseif what == "count" then
-							-- skip (I don't move count addresses atm)
-						elseif what == "size" then
-							memArr[addr + cmdSize] = arr.ItemSize * newCount
-						elseif what == "End" then
-							memArr[addr + cmdSize] = newAddress + arr.ItemSize * newCount
-						end
-					end
-				end
-			end
-		end
-		mem.ChangeGameArray(arrName, newAddress, newCount)
-		mem.prot()
-	end
-
 	-- freeing tables
 	-- game uses offsets from this value, so I subtract lowest among them
 	asmpatch(0x4646DD, "mov ecx, 0x73C028 - 0x17FD8")
@@ -270,7 +207,7 @@ do
 		local count = DataTables.ComputeRowCountInPChar(d.eax, 6, 6) - 2 + 1 -- +1, because there is empty npc at the beginning
 		local newNpcDataAddress = mem.StaticAlloc(count * Game.NPCDataTxt.ItemSize)
 		d.esi = newNpcDataAddress
-		processReferencesTable("NPCDataTxt", newNpcDataAddress, count, npcDataRefs)
+		processReferencesTable{arrName = "NPCDataTxt", newAddress = newNpcDataAddress, newCount = count, addressTable = gameNpcRefs}
 		asmpatch(0x476CDA, "mov [0x73C028], eax")
 		-- 0x739DC4 contains pointers to npcdata.txt npc names (Game.NPCNames is for random names)
 		asmpatch(0x476CEF, "mov eax, 0x739DC4")
@@ -283,7 +220,7 @@ do
 		]])
 
 		local newGameNpcAddress = mem.StaticAlloc(count * Game.NPC.ItemSize)
-		processReferencesTable("NPC", newGameNpcAddress, count, gameNpcRefs)
+		processReferencesTable{arrName = "NPC", newAddress = newGameNpcAddress, newCount = count, addressTable = gameNpcRefs}
 
 		-- function resetting npc names
 		local hooks = HookManager{npcLimitPtr = 0x73C014, newNpcDataAddress = newNpcDataAddress, newGameNpcAddress = newGameNpcAddress, firstRealGameNpcAddress = newGameNpcAddress + Game.NPC.ItemSize, npcdataNpcNamePtrs = 0x739DC4}
@@ -298,7 +235,7 @@ do
 		local count = DataTables.ComputeRowCountInPChar(d.eax, 1, 2) - 1
 		local newGreetingDataAddress = mem.StaticAlloc((count + 1) * Game.NPCGreet.ItemSize) -- +1, because there is empty entry at the beginning
 		d.esi = newGreetingDataAddress + 8 -- size of two editpchars (game gets address of entry it should write to)
-		processReferencesTable("NPCGreet", newGreetingDataAddress, count + 1, npcGreetRefs) -- but mmextension gets real address
+		processReferencesTable{arrName = "NPCGreet", newAddress = newGreetingDataAddress, newCount = count + 1, addressTable = npcGreetRefs} -- but mmextension gets real address
 		asmpatch(0x476E2C, "mov [0x73C044], eax") -- correct data pointer
 		asmpatch(0x476E38, "mov eax, esi")
 	end)
@@ -308,7 +245,7 @@ do
 		local count = DataTables.ComputeRowCountInPChar(d.eax, 1, 2) - 1
 		local newNpcGroupAddress = mem.StaticAlloc(count * Game.NPCGroup.ItemSize)
 		d.esi = newNpcGroupAddress
-		processReferencesTable("NPCGroup", newNpcGroupAddress, count, npcGroupRefs)
+		processReferencesTable{arrName = "NPCGroup", newAddress = newNpcGroupAddress, newCount = count, addressTable = npcGroupRefs}
 		asmpatch(0x476ED4, "mov [0x73C048],eax") -- correct data pointer
 		asmpatch(0x476EE0, "mov eax, esi")
 	end)
@@ -318,7 +255,7 @@ do
 		local count = DataTables.ComputeRowCountInPChar(d.eax, 1, 2) - 1
 		local newNpcNewsAddress = mem.StaticAlloc(count * Game.NPCNews.ItemSize)
 		d.esi = newNpcNewsAddress
-		processReferencesTable("NPCNews", newNpcNewsAddress, count, npcNewsRefs)
+		processReferencesTable{arrName = "NPCNews", newAddress = newNpcNewsAddress, newCount = count, addressTable = npcNewsRefs}
 		asmpatch(0x476F6D, "mov [0x73C034],eax") -- correct data pointer
 		mem.nop(0x476F79)
 	end)
@@ -339,7 +276,7 @@ do
 			mov eax,dword ptr [eax*4 + %npcNames%]
 		]], 0xA)
 
-		processReferencesTable("NPCNames", newNpcNamesAddress, count, npcNamesRefs)
+		processReferencesTable{arrName = "NPCNames", newAddress = newNpcNamesAddress, newCount = count, addressTable = npcNamesRefs}
 		asmpatch(0x477097, "mov eax, " .. newNpcNamesAddress)
 		-- male/female name counts
 		local female, male = 0x73C020, 0x73C024
@@ -396,7 +333,7 @@ do
 
 		-- NPC TEXT
 
-		processReferencesTable("NPCText", newSpacePtr + 4, newTextCount, npcTextRefs)
+		processReferencesTable{arrName = "NPCText", newAddress = newSpacePtr + 4, newCount = newTextCount, addressTable = npcTextRefs}
 		internal.SetArrayUpval(Game.NPCText, "count", max(newTextCount, 789)) -- override actual number with minimum number
 
 		asmpatch(0x4769B6, "mov [0x73C03C],eax") -- correct file text ptrs
@@ -411,7 +348,7 @@ do
 		]])
 		asmpatch(0x476A83, "mov [0x73C038],eax")
 
-		processReferencesTable("NPCTopic", newSpacePtr, newTopicCount, npcTopicRefs)
+		processReferencesTable{arrName = "NPCTopic", newAddress = newSpacePtr, newCount = newTopicCount, addressTable = npcTopicRefs}
 		internal.SetArrayUpval(Game.NPCTopic, "count", max(newTopicCount, 789))
 
 		-- TODO: stuff to do conditional limits removal only if needed
