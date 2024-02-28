@@ -207,7 +207,7 @@ do
 		local count = DataTables.ComputeRowCountInPChar(d.eax, 6, 6) - 2 + 1 -- +1, because there is empty npc at the beginning
 		local newNpcDataAddress = mem.StaticAlloc(count * Game.NPCDataTxt.ItemSize)
 		d.esi = newNpcDataAddress
-		processReferencesTable{arrName = "NPCDataTxt", newAddress = newNpcDataAddress, newCount = count, addressTable = gameNpcRefs}
+		processReferencesTable{arrName = "NPCDataTxt", newAddress = newNpcDataAddress, newCount = count, addressTable = npcDataRefs}
 		asmpatch(0x476CDA, "mov [0x73C028], eax")
 		-- 0x739DC4 contains pointers to npcdata.txt npc names (Game.NPCNames is for random names)
 		asmpatch(0x476CEF, "mov eax, 0x739DC4")

@@ -581,16 +581,25 @@ function cmpSetMapvarBool(name)
 	return x
 end
 
+-- prints set bits in a number
+-- if bitDesc is provided, it should be a table with descriptions as keys and bit values as values, or vice versa
 function printBitValues(combined, bitDesc)
 	local t = {}
-	local bitDescriptions = bitDesc
-	if type(next(bitDesc)) ~= "number" then
-		bitDescriptions = table.invert(bitDesc)
+	local bitDescriptions = bitDesc and table.copy(bitDesc) or {}
+	if type(next(bitDescriptions)) ~= "number" then
+		bitDescriptions = table.invert(bitDescriptions)
 	end
-	for i, v in sortpairs(bitDescriptions) do
-		if bit.band(combined, i) ~= 0 then
-			table.insert(t, string.format("[0x%X] = %s", i, v))
+	local bitVal = 1
+	for i = 0, 31 do
+		if bit.band(combined, bitVal) ~= 0 then
+			local desc = bitDescriptions[bitVal]
+			if desc then
+				table.insert(t, string.format("[0x%X] (#%d) = %s", bitVal, i, desc))
+			else
+				table.insert(t, string.format("[0x%X] (#%d)", bitVal, i))
+			end
 		end
+		bitVal = bitVal * 2
 	end
 	print(table.concat(t, "\r\n"))
 end
@@ -661,3 +670,19 @@ function itemIndexByName(name)
 	end
 end
 
+function getSpriteByName(name)
+	for i, spr in Game.SpritesLod.SpritesSW do
+		if spr.Name:lower():match(name) then
+			return spr
+		end
+	end
+end
+
+function monsterStandSpriteName(id)
+	local f = Game.MonListBin[id].FramesStand:lower()
+	for i, frame in Game.SFTBin do
+		if frame.GroupName:lower() == f then
+			return frame.SpriteName
+		end
+	end
+end

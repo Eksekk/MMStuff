@@ -526,7 +526,7 @@ autohook(0x41E928, function(d)
     local resistancesEntry = deferredTextCallParams[CALL_PARAM_RESISTANCES]
 
     local t = {}
-    t.Monster = Game.DialogLogic.MonsterInfoMonster
+    t.Monster = select(2, internal.GetMonster(u4[d.ebp - 0x10]))
     t.Tooltip = structs.Dlg:new(u4[d.ebp - 8])
     local function addFormattingArgs(t, entry, centered)
         if centered then
@@ -537,7 +537,7 @@ autohook(0x41E928, function(d)
         end
     end
     local function simpleParam(name, entry, centered)
-        t[name] = {Text = mem.string(entry[6])}
+        t[name] = {Text = mem.string(entry[6])}--4f65736
         t["Identified" .. name] = entry[centered and 8 or 10]
         addFormattingArgs(t[name], entry, centered)
     end
@@ -693,7 +693,7 @@ function events.GameInitialized1()
         for mas = const.Novice, const.GM do
             t["Allow" .. masteryStr(mas)] = t.Mastery == const.GM or t.Level * t.Mastery >= t.Monster.Level
         end
-        local allowSpells
+        local allowSpells = false
         for i, pl in Party do
             if select(2, SplitSkill(pl:GetSkill(const.Skills.IdentifyMonster))) >= 3 then
                 allowSpells = true
@@ -711,31 +711,31 @@ function events.GameInitialized1()
 
     -- skip a big batch of NOPs
     asmpatch(0x41E07F, "jmp absolute 0x41E0EF")
-        
+    
     -- skip small chunk of code taken care of by our hook function
     asmpatch(0x41E164, "jmp " .. 0x41E1A4 - 0x41E164)
 end
 
 -- TESTS, feel free to remove
 -- function events.BuildMonsterInformationBox(t) debug.Message(dump(t)) end
-function events.BuildMonsterInformationBox(t)
-    test1(t)
-end
+-- function events.BuildMonsterInformationBox(t)
+--     test1(t)
+-- end
 
-function test1(t)
-    t.EffectsHeader.Text = "abc-" .. t.EffectsHeader.Text .. "-cba" -- abc-Effects-cba
-    t.EffectsHeader.X = t.EffectsHeader.X + 30 -- moved right
-    t.Damage = false -- don't draw
-    t.SpellFirst.Text = "frieblla"
-    t.Resistances[2].Color = RGB(111, 111, 111)
-    for i, res in ipairs(t.Resistances) do
-        if i % 2 == 1 then
-            res.X = res.X - 20
-        else
-            res.X = res.X + 20
-        end
-    end
-    t.ResistancesHeader.UseIndividualTextCoordinates = true
-    t.HitPoints.Color = RGB(111, 111, 111)
+-- function test1(t)
+--     t.EffectsHeader.Text = "abc-" .. t.EffectsHeader.Text .. "-cba" -- abc-Effects-cba
+--     t.EffectsHeader.X = t.EffectsHeader.X + 30 -- moved right
+--     t.Damage = false -- don't draw
+--     t.SpellFirst.Text = "frieblla"
+--     t.Resistances[2].Color = RGB(111, 111, 111)
+--     for i, res in ipairs(t.Resistances) do
+--         if i % 2 == 1 then
+--             res.X = res.X - 20
+--         else
+--             res.X = res.X + 20
+--         end
+--     end
+--     t.ResistancesHeader.UseIndividualTextCoordinates = true
+--     t.HitPoints.Color = RGB(111, 111, 111)
 
-end
+-- end
