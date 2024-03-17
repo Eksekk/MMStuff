@@ -23,6 +23,9 @@
 		},
 		{
 			"path": "../MMExtension/Scripts"
+		},
+		{
+			"path": "../../../../../World of Warcraft 3.3.5a/Interface/AddOns/EventAlert"
 		}
 	],
 	"settings": {
